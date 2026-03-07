@@ -1,7 +1,95 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Search, Filter, Download, Trash2, Eye, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileText, Search, Download, Trash2, Eye, ChevronLeft, ChevronRight, X, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
+
+// Modal Component
+const Modal = ({ isOpen, onClose, onConfirm, title, message, confirmText = 'Delete', confirmVariant = 'danger' }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000,
+      animation: 'fadeIn 0.2s ease-out'
+    }}>
+      <div style={{
+        backgroundColor: 'var(--background-card)',
+        borderRadius: '12px',
+        padding: '24px',
+        maxWidth: '400px',
+        width: '90%',
+        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+        animation: 'slideUp 0.2s ease-out'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '50%',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0
+          }}>
+            <AlertTriangle size={20} style={{ color: 'var(--danger-color)' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600' }}>{title}</h3>
+            <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '14px', lineHeight: '1.5' }}>{message}</p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              color: 'var(--text-secondary)'
+            }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: '12px', marginTop: '24px', justifyContent: 'flex-end' }}>
+          <button
+            onClick={onClose}
+            className="btn btn-secondary"
+            style={{ minWidth: '80px' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`btn ${confirmVariant === 'danger' ? 'btn-danger' : 'btn-primary'}`}
+            style={{ minWidth: '80px' }}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes slideUp {
+          from { transform: translateY(20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+};
 
 const History = () => {
   const [results, setResults] = useState([]);
@@ -10,6 +98,12 @@ const History = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  
+  // Modal states
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [clearAllModalOpen, setClearAllModalOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState(null);
 
   useEffect(() => {
     fetchResults();
@@ -21,18 +115,14 @@ const History = () => {
       const response = await axios.get('http://localhost:5000/api/results', {
         params: { page: currentPage, status: filterStatus }
       });
-      setResults(response.data.results);
-      setTotalPages(response.data.total_pages);
-    } catch {
-      // Mock data
-      setResults([
-        { id: 1, file_name: 'patient_001.edf', result: 'Normal Sinus Rhythm', confidence: 92.5, is_normal: true, created_at: '2024-01-15T10:30:00Z' },
-        { id: 2, file_name: 'patient_002.edf', result: 'Atrial Fibrillation', confidence: 88.3, is_normal: false, created_at: '2024-01-14T14:20:00Z' },
-        { id: 3, file_name: 'patient_003.edf', result: 'Normal Sinus Rhythm', confidence: 95.1, is_normal: true, created_at: '2024-01-14T09:15:00Z' },
-        { id: 4, file_name: 'patient_004.edf', result: 'Ventricular Arrhythmia', confidence: 78.9, is_normal: false, created_at: '2024-01-13T16:45:00Z' },
-        { id: 5, file_name: 'patient_005.edf', result: 'Conduction Block', confidence: 84.2, is_normal: false, created_at: '2024-01-12T11:00:00Z' },
-      ]);
-      setTotalPages(3);
+      setResults(response.data.results || []);
+      setTotalPages(response.data.total_pages || 1);
+      setTotal(response.data.total || 0);
+    } catch (error) {
+      console.error('Error fetching results:', error);
+      setResults([]);
+      setTotalPages(1);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -44,6 +134,7 @@ const History = () => {
   );
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', { 
       year: 'numeric', 
@@ -54,24 +145,85 @@ const History = () => {
     });
   };
 
-  const deleteResult = async (id) => {
-    if (!confirm('Are you sure you want to delete this result?')) return;
+  // Delete single result - opens modal
+  const handleDeleteClick = (id) => {
+    setItemToDelete(id);
+    setDeleteModalOpen(true);
+  };
+
+  // Confirm delete
+  const confirmDelete = async () => {
+    if (!itemToDelete) return;
     
     try {
-      await axios.delete(`http://localhost:5000/api/results/${id}`);
-      setResults(results.filter(r => r.id !== id));
-    } catch {
-      setResults(results.filter(r => r.id !== id));
+      await axios.delete(`http://localhost:5000/api/results/${itemToDelete}`);
+      fetchResults();
+    } catch (error) {
+      console.error('Error deleting result:', error);
+      setResults(results.filter(r => r.id !== itemToDelete));
+    } finally {
+      setDeleteModalOpen(false);
+      setItemToDelete(null);
+    }
+  };
+
+  // Clear all - opens modal
+  const handleClearAllClick = () => {
+    setClearAllModalOpen(true);
+  };
+
+  // Confirm clear all
+  const confirmClearAll = async () => {
+    try {
+      await axios.delete('http://localhost:5000/api/results');
+      fetchResults();
+    } catch (error) {
+      console.error('Error clearing results:', error);
+      setResults([]);
+    } finally {
+      setClearAllModalOpen(false);
     }
   };
 
   return (
     <div className="history-page">
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        onConfirm={confirmDelete}
+        title="Delete Result"
+        message="Are you sure you want to delete this analysis result? This action cannot be undone."
+        confirmText="Delete"
+        confirmVariant="danger"
+      />
+
+      {/* Clear All Confirmation Modal */}
+      <Modal
+        isOpen={clearAllModalOpen}
+        onClose={() => setClearAllModalOpen(false)}
+        onConfirm={confirmClearAll}
+        title="Clear All Results"
+        message="Are you sure you want to delete ALL analysis results? This action cannot be undone."
+        confirmText="Clear All"
+        confirmVariant="danger"
+      />
+
       <div className="page-header">
         <div>
           <h1>Analysis History</h1>
-          <p className="text-secondary">View all previous ECG analyses</p>
+          <p className="text-secondary">View all previous ECG analyses ({total} total)</p>
         </div>
+        {total > 0 && (
+          <button 
+            className="btn btn-secondary"
+            onClick={handleClearAllClick}
+            style={{ color: 'var(--danger-color)' }}
+          >
+            <Trash2 size={16} />
+            Clear All
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -161,12 +313,9 @@ const History = () => {
                           <Link to={`/results/${result.id}`} className="btn btn-sm btn-secondary">
                             <Eye size={14} />
                           </Link>
-                          <button className="btn btn-sm btn-secondary">
-                            <Download size={14} />
-                          </button>
                           <button 
                             className="btn btn-sm btn-secondary"
-                            onClick={() => deleteResult(result.id)}
+                            onClick={() => handleDeleteClick(result.id)}
                             style={{ color: 'var(--danger-color)' }}
                           >
                             <Trash2 size={14} />
@@ -217,7 +366,10 @@ const History = () => {
           <div className="empty-state">
             <FileText />
             <h3>No results found</h3>
-            <p>Try adjusting your search or filters</p>
+            <p>Upload an ECG file to start analysis</p>
+            <Link to="/upload" className="btn btn-primary" style={{ marginTop: '16px' }}>
+              Upload ECG
+            </Link>
           </div>
         )}
       </div>
@@ -226,4 +378,3 @@ const History = () => {
 };
 
 export default History;
-

@@ -1,5 +1,5 @@
 import { useLocation } from 'react-router-dom';
-import { Menu, Sun, Moon, Bell, User } from 'lucide-react';
+import { Menu, Sun, Moon } from 'lucide-react';
 
 const pageTitles = {
   '/dashboard': 'Dashboard',
@@ -22,21 +22,14 @@ const Header = ({ toggleSidebar, toggleTheme, theme }) => {
       </div>
 
       <div className="header-right">
-        <button className="header-btn">
-          <Bell size={20} />
-        </button>
         
         <div className="theme-toggle" onClick={toggleTheme}>
           {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
         </div>
 
-        <button className="header-btn">
-          <User size={20} />
-        </button>
       </div>
     </header>
   );
 };
 
 export default Header;
-

@@ -3,22 +3,27 @@ import { useParams, Link } from 'react-router-dom';
 import { 
   ArrowLeft, 
   Download, 
-  Share2, 
   Activity, 
   Heart,
   AlertTriangle,
   CheckCircle,
   XCircle,
   Clock,
-  FileText
+  FileText,
+  AlertCircle,
+  User,
+  Calendar
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import axios from 'axios';
+import { jsPDF } from 'jspdf';
 
 const Results = () => {
   const { id } = useParams();
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     fetchResult();
@@ -26,60 +31,233 @@ const Results = () => {
 
   const fetchResult = async () => {
     try {
+      setLoading(true);
+      setError(null);
       const response = await axios.get(`http://localhost:5000/api/results/${id}`);
       setResult(response.data);
-    } catch {
-      // Mock data for demo
-      setResult({
-        id: id,
-        file_name: 'patient_sample.edf',
-        status: 'completed',
-        created_at: '2024-01-15T10:30:00Z',
-        result: {
-          primary_diagnosis: 'Normal Sinus Rhythm',
-          confidence: 92.5,
-          is_normal: true,
-          segments_analyzed: 156,
-          predictions: {
-            'Normal Sinus Rhythm': 85,
-            'Atrial Fibrillation': 5,
-            'Ventricular Arrhythmia': 3,
-            'Conduction Block': 2,
-            'Premature Contraction': 3,
-            'ST Segment Abnormality': 2
-          }
-        },
-        ecg_metrics: {
-          heart_rate: 72,
-          rr_interval: 833,
-          hrv: 45,
-          p_wave: 0.12,
-          qrs_complex: 0.08,
-          qt_interval: 0.38
-        },
-        recommendations: [
-          'Continue regular cardiac checkups',
-          'Maintain healthy lifestyle',
-          'No immediate medical intervention required'
-        ]
-      });
+    } catch (err) {
+      console.error('Error fetching result:', err);
+      setError('Could not load results. The analysis may not exist or the server may be unavailable.');
+      setResult(null);
     } finally {
       setLoading(false);
     }
   };
 
+  // PDF Export Function - Full Single Page with Disclaimer at Footer
+  const exportToPDF = async () => {
+    if (!result) return;
+    
+    setExporting(true);
+    
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 15;
+      let yPos = margin;
+
+      // Header
+      doc.setFillColor(102, 126, 234);
+      doc.rect(0, 0, pageWidth, 28, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Arrhythmia Detection Report', pageWidth / 2, 14, { align: 'center' });
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text('ECG Analysis Results - Deep Spiking Neural Network (DSNN)', pageWidth / 2, 22, { align: 'center' });
+
+      yPos = 36;
+
+      // Patient Info Section
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PATIENT INFORMATION', margin, yPos);
+      yPos += 8;
+      
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(11);
+      const patientName = result.patient_name || 'Anonymous';
+      const patientAge = result.patient_age || 'N/A';
+      const fileName = result.file_name || 'Unknown';
+      // Convert to IST (UTC+5:30) for display
+      const createdAt = new Date(result.created_at);
+      const displayOffset = 0; //5.5 * 60 * 60 * 1000
+      const displayDate = new Date(createdAt.getTime() + displayOffset);
+      const analysisDate = displayDate.toLocaleDateString('en-US', { 
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
+      }) + ' IST';
+      
+      doc.text(`Patient Name: ${patientName}`, margin, yPos);
+      doc.text(`Age: ${patientAge} years`, margin + 90, yPos);
+      yPos += 8;
+      doc.text(`Analysis Date: ${analysisDate}`, margin, yPos);
+      doc.text(`File Name: ${fileName}`, margin + 90, yPos);
+      yPos += 12;
+
+      // Diagnosis Result Section
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('DIAGNOSIS RESULT', margin, yPos);
+      yPos += 8;
+      
+      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+      yPos += 3;
+      
+      const isNormal = result.result?.is_normal;
+      if (isNormal) {
+        doc.setFillColor(16, 185, 129);
+      } else {
+        doc.setFillColor(239, 68, 68);
+      }
+      doc.roundedRect(margin, yPos, pageWidth - 2 * margin, 24, 2, 2, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(15);
+      doc.setFont('helvetica', 'bold');
+      doc.text(result.result?.primary_diagnosis || 'Unknown', margin + 5, yPos + 10);
+      doc.setFontSize(11);
+      doc.text(`Confidence: ${result.result?.confidence || 0}%`, margin + 5, yPos + 19);
+      
+      doc.setFont('helvetica', 'normal');
+      const segmentsText = `Segments Analyzed: ${result.result?.segments_analyzed || 0}`;
+      doc.text(segmentsText, pageWidth - margin - doc.getTextWidth(segmentsText) - 5, yPos + 19);
+      
+      yPos += 32;
+
+      // ECG Metrics Section - Full Details
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('ECG METRICS & MEASUREMENTS', margin, yPos);
+      yPos += 8;
+      
+      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+      yPos += 5;
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      
+      // Create a table-like structure for metrics with even spacing
+      const metricsData = [
+        ['Heart Rate', `${result.ecg_metrics?.heart_rate || 'N/A'} BPM`, 'RR Interval', `${result.ecg_metrics?.rr_interval || 'N/A'} ms`],
+        ['HRV (Heart Rate Variability)', `${result.ecg_metrics?.hrv || 'N/A'} ms`, 'P Wave Duration', `${result.ecg_metrics?.p_wave?.toFixed(3) || 'N/A'} s`],
+        ['QRS Complex', `${result.ecg_metrics?.qrs_complex?.toFixed(3) || 'N/A'} s`, 'QT Interval', `${result.ecg_metrics?.qt_interval?.toFixed(3) || 'N/A'} s`]
+      ];
+      
+      metricsData.forEach(row => {
+        doc.text(`${row[0]}:`, margin, yPos);
+        doc.setFont('helvetica', 'bold');
+        doc.text(row[1], margin + 55, yPos);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${row[2]}:`, margin + 100, yPos);
+        doc.setFont('helvetica', 'bold');
+        doc.text(row[3], margin + 140, yPos);
+        doc.setFont('helvetica', 'normal');
+        yPos += 8;
+      });
+      
+      yPos += 8;
+
+      // Prediction Distribution Section
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PREDICTION DISTRIBUTION', margin, yPos);
+      yPos += 8;
+      
+      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+      yPos += 5;
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      
+      if (result.result?.predictions) {
+        Object.entries(result.result.predictions).forEach(([className, percentage]) => {
+          doc.text(`- ${className}:`, margin, yPos);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`${percentage}%`, margin + 65, yPos);
+          doc.setFont('helvetica', 'normal');
+          yPos += 7;
+        });
+      }
+      
+      yPos += 8;
+
+      // Recommendations Section
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('RECOMMENDATIONS', margin, yPos);
+      yPos += 8;
+      
+      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+      yPos += 5;
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      
+      (result.recommendations || []).forEach((rec, index) => {
+        doc.text(`${index + 1}. ${rec}`, margin, yPos);
+        yPos += 7;
+      });
+
+      // Calculate footer position - place disclaimer at bottom (ONLY DISCLAIMER, NO FOOTER TEXT)
+      const footerY = pageHeight - 30;
+      
+      // Disclaimer Box at Footer (full width)
+      doc.setFillColor(255, 250, 240);
+      doc.setDrawColor(255, 200, 100);
+      doc.roundedRect(margin, footerY, pageWidth - 2 * margin, 20, 2, 2, 'FD');
+      
+      doc.setTextColor(180, 100, 0);
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      // Use "WARNING" text instead of symbol for better compatibility
+      doc.text('WARNING', margin + 3, footerY + 6);
+      
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(9);
+      doc.setTextColor(80, 80, 80);
+      doc.text('This is a study-purpose detection system powered by Deep Spiking Neural Network (DSNN).', margin + 3, footerY + 12);
+      doc.text('Don\'t solely rely on this analysis for any medical decisions. Consult a qualified healthcare professional.', margin + 3, footerY + 18);
+
+      // Save with new naming convention: AD_Report_<Patient Name>_<Age>_<File Name>_<Timestamp>
+      // Convert to IST (UTC+5:30)
+      const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+      const istDate = new Date(now.getTime() + istOffset);
+      const timestamp = istDate.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const cleanFileName = fileName.replace(/\.[^/.]+$/, ''); // Remove extension
+      const newFileName = `AD_Report_${patientName.replace(/\s+/g, '_')}_${patientAge}_${cleanFileName}_${timestamp}.pdf`;
+      doc.save(newFileName);
+      
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const getResultBadge = () => {
-    if (!result) return null;
+    if (!result || !result.result) return null;
     if (result.result.is_normal) {
       return <span className="result-badge badge-normal"><CheckCircle size={14} /> Normal</span>;
     }
     return <span className="result-badge badge-danger"><AlertTriangle size={14} /> Abnormal</span>;
   };
 
-  const pieData = result ? Object.entries(result.result.predictions).map(([name, value]) => ({
-    name,
-    value
-  })) : [];
+  const pieData = result && result.result && result.result.predictions 
+    ? Object.entries(result.result.predictions).map(([name, value]) => ({
+        name,
+        value
+      }))
+    : [];
 
   const COLORS = ['#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b'];
 
@@ -89,6 +267,48 @@ const Results = () => {
         <div className="card" style={{ textAlign: 'center', padding: '48px' }}>
           <Activity size={48} style={{ color: 'var(--primary-color)', marginBottom: '16px' }} />
           <p>Loading results...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="results-page">
+        <div className="page-header">
+          <Link to="/history" className="btn btn-secondary">
+            <ArrowLeft size={18} />
+            Back to History
+          </Link>
+        </div>
+        <div className="card" style={{ textAlign: 'center', padding: '48px' }}>
+          <AlertCircle size={48} style={{ color: 'var(--danger-color)', marginBottom: '16px' }} />
+          <h3>Error Loading Results</h3>
+          <p className="text-secondary">{error}</p>
+          <Link to="/upload" className="btn btn-primary" style={{ marginTop: '16px' }}>
+            Upload New ECG
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="results-page">
+        <div className="page-header">
+          <Link to="/history" className="btn btn-secondary">
+            <ArrowLeft size={18} />
+            Back to History
+          </Link>
+        </div>
+        <div className="card" style={{ textAlign: 'center', padding: '48px' }}>
+          <FileText size={48} style={{ color: 'var(--text-secondary)', marginBottom: '16px' }} />
+          <h3>No Results Found</h3>
+          <p className="text-secondary">The requested analysis could not be found.</p>
+          <Link to="/upload" className="btn btn-primary" style={{ marginTop: '16px' }}>
+            Upload New ECG
+          </Link>
         </div>
       </div>
     );
@@ -108,13 +328,13 @@ const Results = () => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-secondary">
+          <button 
+            className="btn btn-secondary" 
+            onClick={exportToPDF}
+            disabled={exporting}
+          >
             <Download size={18} />
-            Export PDF
-          </button>
-          <button className="btn btn-secondary">
-            <Share2 size={18} />
-            Share
+            {exporting ? 'Generating...' : 'Export PDF'}
           </button>
         </div>
       </div>
@@ -127,27 +347,46 @@ const Results = () => {
               width: '64px', 
               height: '64px', 
               borderRadius: '50%', 
-              background: result.result.is_normal ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              background: result.result?.is_normal ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              {result.result.is_normal ? (
+              {result.result?.is_normal ? (
                 <CheckCircle size={32} style={{ color: 'var(--success-color)' }} />
               ) : (
                 <XCircle size={32} style={{ color: 'var(--danger-color)' }} />
               )}
             </div>
             <div>
-              <h2 style={{ marginBottom: '4px' }}>{result.result.primary_diagnosis}</h2>
+              <h2 style={{ marginBottom: '4px' }}>{result.result?.primary_diagnosis || 'Unknown'}</h2>
               {getResultBadge()}
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '36px', fontWeight: 'bold', color: 'var(--primary-color)' }}>
-              {result.result.confidence}%
+              {result.result?.confidence || 0}%
             </div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Confidence Score</div>
+          </div>
+        </div>
+
+        {/* Patient Info Banner */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '24px', 
+          padding: '12px 16px', 
+          background: 'var(--background-secondary)', 
+          borderRadius: '8px',
+          marginBottom: '16px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <User size={16} style={{ color: 'var(--primary-color)' }} />
+            <span style={{ fontWeight: '500' }}>{result.patient_name || 'Anonymous'}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Calendar size={16} style={{ color: 'var(--primary-color)' }} />
+            <span style={{ fontWeight: '500' }}>Age: {result.patient_age || 'N/A'}</span>
           </div>
         </div>
 
@@ -158,7 +397,7 @@ const Results = () => {
             </div>
             <div className="stat-content">
               <div className="stat-label">Heart Rate</div>
-              <div className="stat-value">{result.ecg_metrics.heart_rate} <span style={{ fontSize: '16px' }}>BPM</span></div>
+              <div className="stat-value">{result.ecg_metrics?.heart_rate || 'N/A'} <span style={{ fontSize: '16px' }}>BPM</span></div>
             </div>
           </div>
           <div className="stat-card">
@@ -167,7 +406,7 @@ const Results = () => {
             </div>
             <div className="stat-content">
               <div className="stat-label">RR Interval</div>
-              <div className="stat-value">{result.ecg_metrics.rr_interval} <span style={{ fontSize: '16px' }}>ms</span></div>
+              <div className="stat-value">{result.ecg_metrics?.rr_interval || 'N/A'} <span style={{ fontSize: '16px' }}>ms</span></div>
             </div>
           </div>
           <div className="stat-card">
@@ -176,7 +415,7 @@ const Results = () => {
             </div>
             <div className="stat-content">
               <div className="stat-label">HRV</div>
-              <div className="stat-value">{result.ecg_metrics.hrv} <span style={{ fontSize: '16px' }}>ms</span></div>
+              <div className="stat-value">{result.ecg_metrics?.hrv || 'N/A'} <span style={{ fontSize: '16px' }}>ms</span></div>
             </div>
           </div>
           <div className="stat-card">
@@ -185,7 +424,7 @@ const Results = () => {
             </div>
             <div className="stat-content">
               <div className="stat-label">Segments</div>
-              <div className="stat-value">{result.result.segments_analyzed}</div>
+              <div className="stat-value">{result.result?.segments_analyzed || 0}</div>
             </div>
           </div>
         </div>
@@ -200,43 +439,51 @@ const Results = () => {
               <p className="card-subtitle">Probability across all classes</p>
             </div>
           </div>
-          <div style={{ height: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={90}
-                  paddingAngle={2}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={{ marginTop: '16px' }}>
-            {pieData.map((item, index) => (
-              <div key={index} style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'space-between',
-                padding: '8px 0',
-                borderBottom: '1px solid var(--border-color)'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: COLORS[index] }} />
-                  <span style={{ fontSize: '14px' }}>{item.name}</span>
-                </div>
-                <span style={{ fontWeight: '600' }}>{item.value}%</span>
+          {pieData.length > 0 ? (
+            <>
+              <div style={{ height: '250px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      dataKey="value"
+                    >
+                      {pieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
+              <div style={{ marginTop: '16px' }}>
+                {pieData.map((item, index) => (
+                  <div key={index} style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'space-between',
+                    padding: '8px 0',
+                    borderBottom: '1px solid var(--border-color)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: COLORS[index] }} />
+                      <span style={{ fontSize: '14px' }}>{item.name}</span>
+                    </div>
+                    <span style={{ fontWeight: '600' }}>{item.value}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">
+              <p>No prediction data available</p>
+            </div>
+          )}
         </div>
 
         {/* ECG Waveform Metrics */}
@@ -249,10 +496,10 @@ const Results = () => {
           </div>
           <div style={{ display: 'grid', gap: '16px' }}>
             {[
-              { label: 'P Wave Duration', value: result.ecg_metrics.p_wave, unit: 's' },
-              { label: 'QRS Complex', value: result.ecg_metrics.qrs_complex, unit: 's' },
-              { label: 'QT Interval', value: result.ecg_metrics.qt_interval, unit: 's' },
-              { label: 'RR Interval', value: result.ecg_metrics.rr_interval / 1000, unit: 's' },
+              { label: 'P Wave Duration', value: result.ecg_metrics?.p_wave, unit: 's' },
+              { label: 'QRS Complex', value: result.ecg_metrics?.qrs_complex, unit: 's' },
+              { label: 'QT Interval', value: result.ecg_metrics?.qt_interval, unit: 's' },
+              { label: 'RR Interval', value: result.ecg_metrics?.rr_interval ? result.ecg_metrics.rr_interval / 1000 : null, unit: 's' },
             ].map((metric, index) => (
               <div key={index} style={{ 
                 display: 'flex', 
@@ -264,7 +511,7 @@ const Results = () => {
               }}>
                 <span>{metric.label}</span>
                 <span style={{ fontWeight: '600', color: 'var(--primary-color)' }}>
-                  {metric.value.toFixed(3)} {metric.unit}
+                  {metric.value !== null && metric.value !== undefined ? `${metric.value.toFixed(3)} ${metric.unit}` : 'N/A'}
                 </span>
               </div>
             ))}
@@ -281,7 +528,7 @@ const Results = () => {
           </div>
         </div>
         <div style={{ display: 'grid', gap: '12px' }}>
-          {result.recommendations.map((rec, index) => (
+          {(result.recommendations || []).map((rec, index) => (
             <div key={index} style={{ 
               display: 'flex', 
               alignItems: 'center', 
@@ -302,4 +549,3 @@ const Results = () => {
 };
 
 export default Results;
-

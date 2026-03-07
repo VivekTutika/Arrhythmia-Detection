@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload as UploadIcon, FileAudio, AlertCircle, CheckCircle } from 'lucide-react';
+import { Upload as UploadIcon, FileAudio, CheckCircle, User, Calendar } from 'lucide-react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
@@ -10,6 +10,11 @@ const Upload = () => {
   const [files, setFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
+  
+  // Patient information
+  const [patientName, setPatientName] = useState('');
+  const [patientAge, setPatientAge] = useState('');
+  const [showPatientForm, setShowPatientForm] = useState(false);
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -58,6 +63,13 @@ const Upload = () => {
       return;
     }
 
+    // Show patient form if not already shown
+    if (!showPatientForm && !patientName) {
+      setShowPatientForm(true);
+      toast.error('Please enter patient information');
+      return;
+    }
+
     setIsUploading(true);
     const uploadedIds = [];
 
@@ -68,7 +80,14 @@ const Upload = () => {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('patient_id', `patient_${Date.now()}_${i}`);
+        
+        // Include patient information
+        const patientInfo = {
+          name: patientName || 'Anonymous',
+          age: patientAge || 'N/A',
+          id: `patient_${Date.now()}_${i}`
+        };
+        formData.append('patient_info', JSON.stringify(patientInfo));
 
         const response = await axios.post('http://localhost:5000/api/analyze', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -81,7 +100,7 @@ const Upload = () => {
         uploadedIds.push(response.data.id);
         setUploadProgress(prev => ({ ...prev, [file.name]: 'completed' }));
         toast.success(`Analysis complete for ${file.name}`);
-      } catch (error) {
+      } catch {
         setUploadProgress(prev => ({ ...prev, [file.name]: 'error' }));
         toast.error(`Failed to analyze ${file.name}`);
       }
@@ -100,6 +119,46 @@ const Upload = () => {
         <div>
           <h1>Upload ECG Data</h1>
           <p className="text-secondary">Upload EDF files for arrhythmia detection</p>
+        </div>
+      </div>
+
+      {/* Patient Information Form */}
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <div className="card-header">
+          <div>
+            <h3 className="card-title">Patient Information</h3>
+            <p className="card-subtitle">Enter patient details for the report</p>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
+              <User size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+              Patient Name
+            </label>
+            <input
+              type="text"
+              className="form-input"
+              placeholder="Enter patient name"
+              value={patientName}
+              onChange={(e) => setPatientName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
+              <Calendar size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+              Age
+            </label>
+            <input
+              type="number"
+              className="form-input"
+              placeholder="Enter age"
+              value={patientAge}
+              onChange={(e) => setPatientAge(e.target.value)}
+              min="0"
+              max="150"
+            />
+          </div>
         </div>
       </div>
 
@@ -170,7 +229,7 @@ const Upload = () => {
                       <CheckCircle size={20} style={{ color: 'var(--success-color)' }} />
                     )}
                     {uploadProgress[file.name] === 'error' && (
-                      <AlertCircle size={20} style={{ color: 'var(--danger-color)' }} />
+                      <span style={{ color: 'var(--danger-color)', fontSize: '12px' }}>Error</span>
                     )}
                     {uploadProgress[file.name] === 'uploading' && (
                       <span style={{ fontSize: '12px', color: 'var(--primary-color)' }}>
@@ -228,6 +287,24 @@ const Upload = () => {
               margin: '0 auto 12px',
               fontWeight: 'bold'
             }}>1</div>
+            <h4>Enter Patient Info</h4>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Provide patient name and age for the report
+            </p>
+          </div>
+          <div style={{ textAlign: 'center', padding: '16px' }}>
+            <div style={{ 
+              width: '48px', 
+              height: '48px', 
+              borderRadius: '50%', 
+              background: 'var(--primary-color)',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 12px',
+              fontWeight: 'bold'
+            }}>2</div>
             <h4>Upload ECG</h4>
             <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
               Upload EDF format ECG files along with QRS annotations
@@ -245,7 +322,7 @@ const Upload = () => {
               justifyContent: 'center',
               margin: '0 auto 12px',
               fontWeight: 'bold'
-            }}>2</div>
+            }}>3</div>
             <h4>AI Analysis</h4>
             <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
               Our DSNN model analyzes the ECG for arrhythmia patterns
@@ -263,7 +340,7 @@ const Upload = () => {
               justifyContent: 'center',
               margin: '0 auto 12px',
               fontWeight: 'bold'
-            }}>3</div>
+            }}>4</div>
             <h4>View Results</h4>
             <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
               Get detailed results with confidence scores and visualizations
@@ -276,4 +353,3 @@ const Upload = () => {
 };
 
 export default Upload;
-

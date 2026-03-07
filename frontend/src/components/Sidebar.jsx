@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Activity, LayoutDashboard, Upload, History, Settings, Info } from 'lucide-react';
+import { LayoutDashboard, Upload, History, Settings, Info } from 'lucide-react';
 
 const Sidebar = ({ isOpen }) => {
   const navItems = [
@@ -12,7 +12,6 @@ const Sidebar = ({ isOpen }) => {
   return (
     <aside className={`sidebar ${isOpen ? 'open' : 'closed'}`}>
       <div className="sidebar-header">
-        <div className="logo">AD</div>
         <div className="title">Arrhythmia Detector</div>
       </div>
       
@@ -29,9 +28,9 @@ const Sidebar = ({ isOpen }) => {
         ))}
       </nav>
 
-      <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)' }}>
+      <div style={{ padding: '6px', borderTop: '1px solid var(--border-color)' }}>
         <div style={{ 
-          padding: '12px', 
+          padding: '6px', 
           background: 'var(--background-secondary)', 
           borderRadius: '8px',
           display: 'flex',
