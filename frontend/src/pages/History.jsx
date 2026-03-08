@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Search, Download, Trash2, Eye, ChevronLeft, ChevronRight, X, AlertTriangle } from 'lucide-react';
+import { FileText, Search, Download, Trash2, Eye, ChevronLeft, ChevronRight, X, AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import axios from 'axios';
 
 // Modal Component
@@ -100,6 +100,9 @@ const History = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   
+  // Sorting state
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'desc' });
+  
   // Modal states
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [clearAllModalOpen, setClearAllModalOpen] = useState(false);
@@ -128,10 +131,54 @@ const History = () => {
     }
   };
 
+  // Filter results based on search term
   const filteredResults = results.filter(r => 
     r.file_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.result.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Sorting function
+  const sortedResults = [...filteredResults].sort((a, b) => {
+    if (!sortConfig.key) return 0;
+    
+    let aValue, bValue;
+    
+    if (sortConfig.key === 'confidence') {
+      aValue = a.confidence;
+      bValue = b.confidence;
+    } else if (sortConfig.key === 'date') {
+      aValue = new Date(a.created_at).getTime();
+      bValue = new Date(b.created_at).getTime();
+    } else if (sortConfig.key === 'status') {
+      // Sort by is_normal (true first for desc, false first for asc)
+      aValue = a.is_normal ? 1 : 0;
+      bValue = b.is_normal ? 1 : 0;
+    } else {
+      return 0;
+    }
+    
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // Sort handler
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  };
+
+  // Get sort icon
+  const getSortIcon = (columnKey) => {
+    if (sortConfig.key !== columnKey) {
+      return <ArrowUpDown size={14} style={{ opacity: 0.5 }} />;
+    }
+    return sortConfig.direction === 'asc' ? 
+      <ArrowUp size={14} style={{ color: 'var(--primary-color)' }} /> : 
+      <ArrowDown size={14} style={{ color: 'var(--primary-color)' }} />;
+  };
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
@@ -270,7 +317,7 @@ const History = () => {
           <div style={{ textAlign: 'center', padding: '48px' }}>
             <p>Loading results...</p>
           </div>
-        ) : filteredResults.length > 0 ? (
+        ) : sortedResults.length > 0 ? (
           <>
             <div className="table-container">
               <table className="table">
@@ -278,14 +325,35 @@ const History = () => {
                   <tr>
                     <th>File Name</th>
                     <th>Result</th>
-                    <th>Confidence</th>
-                    <th>Date</th>
-                    <th>Status</th>
+                    <th 
+                      onClick={() => handleSort('confidence')}
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Confidence {getSortIcon('confidence')}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleSort('date')}
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Date {getSortIcon('date')}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleSort('status')}
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Status {getSortIcon('status')}
+                      </div>
+                    </th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredResults.map((result) => (
+                  {sortedResults.map((result) => (
                     <tr key={result.id}>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

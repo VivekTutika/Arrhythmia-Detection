@@ -39,7 +39,7 @@ const Sidebar = ({ isOpen }) => {
         }}>
           <Info size={16} style={{ color: 'var(--text-secondary)' }} />
           <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-            DSNN v1.0.0
+            Arrhythmia Detector v1.0.0
           </span>
         </div>
       </div>
