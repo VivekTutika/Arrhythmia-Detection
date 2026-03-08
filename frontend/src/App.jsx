@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
+import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import Upload from './pages/Upload';
 import Results from './pages/Results';
@@ -35,7 +36,11 @@ function App() {
           />
           <div className="content-area">
             <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<Navigate to="/home" replace />} />
+              <Route 
+                path="/home" 
+                element={<Home isLoading={isLoading} setIsLoading={setIsLoading} />} 
+              />
               <Route 
                 path="/dashboard" 
                 element={<Dashboard isLoading={isLoading} setIsLoading={setIsLoading} />} 

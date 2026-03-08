@@ -11,9 +11,9 @@ const Sidebar = ({ isOpen }) => {
 
   return (
     <aside className={`sidebar ${isOpen ? 'open' : 'closed'}`}>
-      <div className="sidebar-header">
+      <NavLink to="/home" className="sidebar-header">
         <div className="title">Arrhythmia Detector</div>
-      </div>
+      </NavLink>
       
       <nav className="sidebar-nav">
         {navItems.map((item) => (
