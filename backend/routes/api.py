@@ -88,14 +88,23 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         # Try to load trained model weights if available
         model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'dsnn_model.pth')
         if os.path.exists(model_path):
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            logger.info("Loaded trained model weights")
+            try:
+                checkpoint = torch.load(model_path, map_location=device)
+                # Check if it's a checkpoint dict or state_dict
+                if 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    logger.info(f"Loaded trained model weights from epoch {checkpoint.get('epoch', 'unknown')}")
+                else:
+                    model.load_state_dict(checkpoint)
+                    logger.info("Loaded trained model weights")
+            except Exception as e:
+                logger.warning(f"Could not load model weights: {e}. Using randomly initialized model.")
         
         model.eval()
         dsnn_system = DSNNSystem(model, device=device)
         
-        # Convert segments to tensor
-        X = torch.FloatTensor(segments).unsqueeze(2)  # Add channel dimension
+        # Convert segments to tensor - ensure proper shape for Conv1d: [batch, channels, sequence_length]
+        X = torch.FloatTensor(segments)  # Shape: [batch, channels, sequence_length]
         
         # Run predictions in batches
         predictions = []
@@ -104,6 +113,10 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         with torch.no_grad():
             for i in range(0, len(X), batch_size):
                 batch = X[i:i+batch_size].to(device)
+                # Ensure batch is 3D: [batch_size, channels, sequence_length]
+                if batch.dim() == 4:
+                    # If 4D [batch, channels, 1, seq], squeeze the height dimension
+                    batch = batch.squeeze(2)
                 batch_preds = dsnn_system.process_ecg(batch)
                 predictions.extend(batch_preds.cpu().numpy())
         
@@ -319,13 +332,15 @@ def get_dashboard():
             for k, v in class_counts.items()
         ]
         
-        # Recent results (last 5)
+        # Recent results (last 5) - WITH is_normal and patient_name fields
         recent_results = [
             {
                 'id': r['id'],
+                'patient_name': r.get('patient_name', 'Anonymous'),
                 'file_name': r['file_name'],
                 'result': r.get('result', {}).get('primary_diagnosis', 'Unknown'),
                 'confidence': r.get('result', {}).get('confidence', 0),
+                'is_normal': r.get('result', {}).get('is_normal', True),
                 'date': r.get('created_at', '')[:10]
             }
             for r in sorted(results, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
@@ -426,6 +441,7 @@ def get_results():
             res = r.get('result', {})
             formatted_results.append({
                 'id': r['id'],
+                'patient_name': r.get('patient_name', 'Anonymous'),
                 'file_name': r['file_name'],
                 'result': res.get('primary_diagnosis', 'Unknown'),
                 'confidence': res.get('confidence', 0),

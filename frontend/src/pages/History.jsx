@@ -131,6 +131,7 @@ const History = () => {
 
   // Filter results based on search term
   const filteredResults = results.filter(r => 
+    (r.patient_name && r.patient_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
     r.file_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.result.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -141,7 +142,13 @@ const History = () => {
     
     let aValue, bValue;
     
-    if (sortConfig.key === 'confidence') {
+    if (sortConfig.key === 'patient_name') {
+      aValue = (a.patient_name || 'Anonymous').toLowerCase();
+      bValue = (b.patient_name || 'Anonymous').toLowerCase();
+    } else if (sortConfig.key === 'file_name') {
+      aValue = a.file_name.toLowerCase();
+      bValue = b.file_name.toLowerCase();
+    } else if (sortConfig.key === 'confidence') {
       aValue = a.confidence;
       bValue = b.confidence;
     } else if (sortConfig.key === 'date') {
@@ -278,7 +285,7 @@ const History = () => {
             <input
               type="text"
               className="form-input"
-              placeholder="Search by file name or result..."
+              placeholder="Search by patient name, file name, or result..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{ paddingLeft: '40px' }}
@@ -320,7 +327,22 @@ const History = () => {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>File Name</th>
+                    <th 
+                      onClick={() => handleSort('patient_name')}
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Patient Name {getSortIcon('patient_name')}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleSort('file_name')}
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        File Name {getSortIcon('file_name')}
+                      </div>
+                    </th>
                     <th>Result</th>
                     <th 
                       onClick={() => handleSort('confidence')}
@@ -352,6 +374,11 @@ const History = () => {
                 <tbody>
                   {sortedResults.map((result) => (
                     <tr key={result.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: '500' }}>{result.patient_name || 'Anonymous'}</span>
+                        </div>
+                      </td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <FileText size={16} style={{ color: 'var(--primary-color)' }} />

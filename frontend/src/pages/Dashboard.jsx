@@ -232,6 +232,7 @@ const Dashboard = () => {
             <table className="table">
               <thead>
                 <tr>
+                  <th>Patient Name</th>
                   <th>File Name</th>
                   <th>Result</th>
                   <th>Confidence</th>
@@ -242,6 +243,7 @@ const Dashboard = () => {
               <tbody>
                 {recentResults.map((result) => (
                   <tr key={result.id}>
+                    <td>{result.patient_name || 'Anonymous'}</td>
                     <td>{result.file_name}</td>
                     <td>
                       <span className={`result-badge ${result.is_normal ? 'badge-normal' : 'badge-warning'}`}>

@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-// Get API base URL from environment variable or default to localhost
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// In development, use the proxy (no CORS issues)
+// In production, use the environment variable
+const isDevelopment = import.meta.env.DEV;
+const API_BASE_URL = isDevelopment ? '' : (import.meta.env.VITE_API_URL || 'http://localhost:5000');
 
 // Create axios instance with default config
 const apiClient = axios.create({
