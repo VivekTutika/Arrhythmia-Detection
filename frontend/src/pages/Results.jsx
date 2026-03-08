@@ -15,7 +15,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import axios from 'axios';
+import { getResult } from '../services/api';
 import { jsPDF } from 'jspdf';
 
 const Results = () => {
@@ -33,8 +33,8 @@ const Results = () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await axios.get(`http://localhost:5000/api/results/${id}`);
-      setResult(response.data);
+      const data = await getResult(id);
+      setResult(data);
     } catch (err) {
       console.error('Error fetching result:', err);
       setError('Could not load results. The analysis may not exist or the server may be unavailable.');
@@ -88,7 +88,7 @@ const Results = () => {
       const fileName = result.file_name || 'Unknown';
       // Convert to IST (UTC+5:30) for display
       const createdAt = new Date(result.created_at);
-      const displayOffset = 0; //5.5 * 60 * 60 * 1000
+      const displayOffset = 5.5 * 60 * 60 * 1000;
       const displayDate = new Date(createdAt.getTime() + displayOffset);
       const analysisDate = displayDate.toLocaleDateString('en-US', { 
         year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
@@ -206,10 +206,10 @@ const Results = () => {
         yPos += 7;
       });
 
-      // Calculate footer position - place disclaimer at bottom (ONLY DISCLAIMER, NO FOOTER TEXT)
+      // Calculate footer position - place disclaimer at bottom
       const footerY = pageHeight - 30;
       
-      // Disclaimer Box at Footer (full width)
+      // Disclaimer Box at Footer
       doc.setFillColor(255, 250, 240);
       doc.setDrawColor(255, 200, 100);
       doc.roundedRect(margin, footerY, pageWidth - 2 * margin, 20, 2, 2, 'FD');
@@ -217,7 +217,6 @@ const Results = () => {
       doc.setTextColor(180, 100, 0);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      // Use "WARNING" text instead of symbol for better compatibility
       doc.text('WARNING', margin + 3, footerY + 6);
       
       doc.setFont('helvetica', 'italic');
@@ -226,13 +225,12 @@ const Results = () => {
       doc.text('This is a study-purpose detection system powered by Deep Spiking Neural Network (DSNN).', margin + 3, footerY + 12);
       doc.text('Don\'t solely rely on this analysis for any medical decisions. Consult a qualified healthcare professional.', margin + 3, footerY + 18);
 
-      // Save with new naming convention: AD_Report_<Patient Name>_<Age>_<File Name>_<Timestamp>
-      // Convert to IST (UTC+5:30)
+      // Save with new naming convention
       const now = new Date();
-      const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+      const istOffset = 5.5 * 60 * 60 * 1000;
       const istDate = new Date(now.getTime() + istOffset);
       const timestamp = istDate.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const cleanFileName = fileName.replace(/\.[^/.]+$/, ''); // Remove extension
+      const cleanFileName = fileName.replace(/\.[^/.]+$/, '');
       const newFileName = `AD_Report_${patientName.replace(/\s+/g, '_')}_${patientAge}_${cleanFileName}_${timestamp}.pdf`;
       doc.save(newFileName);
       

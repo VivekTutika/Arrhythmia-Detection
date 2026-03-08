@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Search, Download, Trash2, Eye, ChevronLeft, ChevronRight, X, AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
-import axios from 'axios';
+import { FileText, Search, Trash2, Eye, ChevronLeft, ChevronRight, X, AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { getAllResults, deleteResult, deleteAllResults } from '../services/api';
 
 // Modal Component
 const Modal = ({ isOpen, onClose, onConfirm, title, message, confirmText = 'Delete', confirmVariant = 'danger' }) => {
@@ -115,12 +115,10 @@ const History = () => {
   const fetchResults = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:5000/api/results', {
-        params: { page: currentPage, status: filterStatus }
-      });
-      setResults(response.data.results || []);
-      setTotalPages(response.data.total_pages || 1);
-      setTotal(response.data.total || 0);
+      const data = await getAllResults(currentPage, filterStatus);
+      setResults(data.results || []);
+      setTotalPages(data.total_pages || 1);
+      setTotal(data.total || 0);
     } catch (error) {
       console.error('Error fetching results:', error);
       setResults([]);
@@ -150,7 +148,6 @@ const History = () => {
       aValue = new Date(a.created_at).getTime();
       bValue = new Date(b.created_at).getTime();
     } else if (sortConfig.key === 'status') {
-      // Sort by is_normal (true first for desc, false first for asc)
       aValue = a.is_normal ? 1 : 0;
       bValue = b.is_normal ? 1 : 0;
     } else {
@@ -203,7 +200,7 @@ const History = () => {
     if (!itemToDelete) return;
     
     try {
-      await axios.delete(`http://localhost:5000/api/results/${itemToDelete}`);
+      await deleteResult(itemToDelete);
       fetchResults();
     } catch (error) {
       console.error('Error deleting result:', error);
@@ -222,7 +219,7 @@ const History = () => {
   // Confirm clear all
   const confirmClearAll = async () => {
     try {
-      await axios.delete('http://localhost:5000/api/results');
+      await deleteAllResults();
       fetchResults();
     } catch (error) {
       console.error('Error clearing results:', error);

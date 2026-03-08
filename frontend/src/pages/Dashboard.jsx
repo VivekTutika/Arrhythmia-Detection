@@ -9,7 +9,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import axios from 'axios';
+import { getDashboardStats } from '../services/api';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -29,18 +29,17 @@ const Dashboard = () => {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:5000/api/dashboard');
-      setStats(response.data.stats || {
+      const data = await getDashboardStats();
+      setStats(data.stats || {
         totalTests: 0,
         normalResults: 0,
         abnormalResults: 0,
         avgConfidence: 0
       });
-      setRecentResults(response.data.recent_results || []);
-      setClassDistribution(response.data.class_distribution || []);
+      setRecentResults(data.recent_results || []);
+      setClassDistribution(data.class_distribution || []);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      // Set empty state on error
       setStats({
         totalTests: 0,
         normalResults: 0,

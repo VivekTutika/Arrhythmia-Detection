@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload as UploadIcon, FileAudio, CheckCircle, User, Calendar } from 'lucide-react';
-import axios from 'axios';
 import toast from 'react-hot-toast';
+import { analyzeECG } from '../services/api';
 
 const Upload = () => {
   const navigate = useNavigate();
@@ -78,29 +78,18 @@ const Upload = () => {
       setUploadProgress(prev => ({ ...prev, [file.name]: 'uploading' }));
 
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
         // Include patient information
         const patientInfo = {
           name: patientName || 'Anonymous',
           age: patientAge || 'N/A',
           id: `patient_${Date.now()}_${i}`
         };
-        formData.append('patient_info', JSON.stringify(patientInfo));
 
-        const response = await axios.post('http://localhost:5000/api/analyze', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          onUploadProgress: (progressEvent) => {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            setUploadProgress(prev => ({ ...prev, [file.name]: percentCompleted }));
-          }
-        });
-
-        uploadedIds.push(response.data.id);
+        const response = await analyzeECG(file, patientInfo);
+        uploadedIds.push(response.id);
         setUploadProgress(prev => ({ ...prev, [file.name]: 'completed' }));
         toast.success(`Analysis complete for ${file.name}`);
-      } catch {
+      } catch (error) {
         setUploadProgress(prev => ({ ...prev, [file.name]: 'error' }));
         toast.error(`Failed to analyze ${file.name}`);
       }
