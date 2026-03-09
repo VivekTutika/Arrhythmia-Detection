@@ -56,7 +56,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
-        from backend.train_dsnn import (
+        from services.train_dsnn import (
             process_single_file, 
             extract_segments_sliding_window,
             DSNN,
@@ -534,4 +534,180 @@ def clear_all_results():
         return jsonify({'message': 'All results cleared successfully'})
     except Exception as e:
         logger.error(f"Error clearing results: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ------- MODEL TRAINING AND DATA CONVERSION ENDPOINTS -------
+
+@api_bp.route('/convert-mitbih', methods=['POST'])
+def convert_mitbih():
+    """
+    Convert MIT-BIH dataset to EDF and QRS format
+    """
+    try:
+        import sys
+        import os
+        
+        # Add parent directory to path for imports
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        from services.converter import convert_all_mitbih_files, get_mitbih_files
+        
+        # Get list of files to convert
+        record_names = get_mitbih_files()
+        
+        if not record_names:
+            return jsonify({'error': 'No MIT-BIH files found'}), 400
+        
+        # Run conversion
+        results = convert_all_mitbih_files()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Conversion complete! {results["edf"]["success"]} EDF and {results["qrs"]["success"]} QRS files created.',
+            'results': results
+        })
+    except Exception as e:
+        logger.error(f"Error converting MIT-BIH: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/train-model', methods=['POST'])
+def train_model():
+    """
+    Train the DSNN model with given parameters
+    """
+    try:
+        import sys
+        import threading
+        import time
+        from io import StringIO
+        
+        # Get parameters from request
+        data = request.get_json() or {}
+        dataset_path = data.get('dataset_path', 'Dataset/edf')
+        epochs = int(data.get('epochs', 50))
+        
+        # Validate dataset path
+        if not os.path.exists(dataset_path):
+            return jsonify({'error': f'Dataset path does not exist: {dataset_path}'}), 400
+        
+        # Get list of EDF files in the dataset
+        edf_files = [f.replace('.edf', '') for f in os.listdir(dataset_path) if f.endswith('.edf')]
+        
+        if not edf_files:
+            return jsonify({'error': 'No EDF files found in the dataset path'}), 400
+        
+        # Create a queue to store training progress
+        progress_queue = []
+
+        def run_training():
+            """Run training in a separate thread"""
+            try:
+                # Import training module - use relative import after adding to path
+                from services.train_dsnn import main as train_main
+                import matplotlib
+                matplotlib.use('Agg')  # Use non-interactive backend
+                import matplotlib.pyplot as plt
+                
+                # Capture output
+                old_stdout = sys.stdout
+                sys.stdout = mystdout = StringIO()
+                
+                # Run training
+                results = train_main(
+                    base_path=dataset_path,
+                    file_names=edf_files,
+                    num_channels=2,
+                    segment_length=24,
+                    use_sliding_window=True,
+                    batch_size=32,
+                    epochs=epochs,
+                    learning_rate=0.001,
+                    train_model=True
+                )
+                
+                sys.stdout = old_stdout
+                
+                # Get training output
+                training_output = mystdout.getvalue()
+                
+                # Find generated image files
+                image_files = []
+                for f in ['training_history.png', 'confusion_matrix.png']:
+                    if os.path.exists(f):
+                        image_files.append('/images/' + f)
+                
+                # Copy model to backend/models as dsnn_model.pth (replace existing)
+                models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+                os.makedirs(models_dir, exist_ok=True)
+                
+                # Find the best model and copy it
+                for model_name in ['best_acc_model.pth', 'best_loss_model.pth']:
+                    src_path = os.path.join(models_dir, model_name)
+                    if os.path.exists(src_path):
+                        dst_path = os.path.join(models_dir, 'dsnn_model.pth')
+                        import shutil
+                        shutil.copy2(src_path, dst_path)
+                        break
+                
+                progress_queue.append({
+                    'success': True,
+                    'output': training_output,
+                    'image_files': image_files
+                })
+                
+            except Exception as e:
+                progress_queue.append({
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        # Start training in background thread
+        training_thread = threading.Thread(target=run_training)
+        training_thread.start()
+        
+        # Return immediately with status
+        return jsonify({
+            'success': True,
+            'message': 'Training started',
+            'status': 'running',
+            'dataset_path': dataset_path,
+            'epochs': epochs,
+            'files_count': len(edf_files)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting training: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/training-status', methods=['GET'])
+def training_status():
+    """
+    Get training status and results
+    """
+    try:
+        # Check if training is still running
+        # For simplicity, return a status indicating completion
+        # In production, you'd use a more robust method
+        
+        # Find generated image files
+        image_files = []
+        for f in ['training_history.png', 'confusion_matrix.png']:
+            if os.path.exists(f):
+                image_files.append('/images/' + f)
+        
+        # Check for model files
+        models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+        model_exists = os.path.exists(os.path.join(models_dir, 'dsnn_model.pth'))
+        
+        return jsonify({
+            'status': 'completed' if model_exists else 'not_started',
+            'image_files': image_files,
+            'model_exists': model_exists
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting training status: {e}")
         return jsonify({'error': str(e)}), 500

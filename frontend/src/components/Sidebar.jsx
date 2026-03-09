@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Upload, History, Settings, Info } from 'lucide-react';
+import { LayoutDashboard, Upload, History, Settings, Info, Activity } from 'lucide-react';
 
 const Sidebar = ({ isOpen }) => {
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/upload', icon: Upload, label: 'Upload' },
     { path: '/history', icon: History, label: 'History' },
+    { path: '/model-training', icon: Activity, label: 'Model Training' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 

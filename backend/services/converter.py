@@ -63,30 +63,8 @@ def convert_dat_hea_to_edf(record_name, mitbih_base=None, edf_output=None):
         
         output_file = os.path.join(edf_output, f"{record_name}.edf")
         
-        # Try using edfio if available, otherwise use basic numpy approach
-        try:
-            import edfio
-            
-            # Convert wfdb record to edfio format and write
-            edf = edfio.EdfFile()
-            
-            # Add signals
-            for i, signal in enumerate(record.p_signal.T if record.p_signal is not None else record.d_signal.astype(float).T):
-                edf.append_signal(
-                    signal,
-                    sampling_rate=int(record.fs),
-                    label=record.sig_name[i] if record.sig_name else f"Channel {i}",
-                    unit='mV' if record.units[i] else 'mV'
-                )
-            
-            # Set patient info
-            # EDF header typically contains: subject info, recording info, start date/time
-            # wfdb records don't have all this info, so we use defaults
-            edf.write(output_file)
-            
-        except ImportError:
-            # Fallback: Create basic EDF file manually using numpy
-            _write_basic_edf(record, output_file)
+        # Always use the basic EDF writer - it's more reliable
+        _write_basic_edf(record, output_file)
         
         return {
             'success': True,
@@ -108,24 +86,19 @@ def _write_basic_edf(record, output_file):
     This is a simplified implementation for compatibility.
     """
     # Get signal data
-    if record.p_signal is not None:
-        signals = record.p_signal.astype(np.float32)
-    else:
-        signals = record.d_signal.astype(np.float32)
+    try:
+        if record.p_signal is not None:
+            signals = record.p_signal.astype(np.float32)
+        else:
+            signals = record.d_signal.astype(np.float32)
+    except Exception as e:
+        raise Exception(f"Error getting signal data: {e}")
     
     num_signals = signals.shape[1] if signals.ndim > 1 else 1
     num_samples = signals.shape[0]
     
     # EDF header size is 256 bytes + num_signals * 256 bytes
     header_size = 256 + num_signals * 256
-    
-    # Build header
-    # EDF format: 8-char magic, 80-char patient ID, 80-char recording info,
-    #             8-char start date, 8-char start time, 8-char num header bytes,
-    #             44-char reserved, 8-char num data records, 8-char data record duration,
-    #             4-char num signals (int), then per-signal: 16-char label, 80-char transducer,
-    #             8-char physical dimension, 8-char physical min, 8-char physical max,
-    #             8-char digital min, 8-char digital max, 80-char prefiltering, 8-char num samples
     
     # Handle single channel case
     if num_signals == 1:
@@ -142,6 +115,64 @@ def _write_basic_edf(record, output_file):
     
     digital_mins = np.iinfo(np.int16).min * np.ones(num_signals)
     digital_maxs = np.iinfo(np.int16).max * np.ones(num_signals)
+    
+    # Get signal names - handle ALL possible types
+    sig_names = []
+    try:
+        if record.sig_name is not None:
+            # Convert to list in case it's a numpy array or other iterable
+            sig_name_iterable = list(record.sig_name) if hasattr(record.sig_name, '__iter__') else [record.sig_name]
+            for name in sig_name_iterable:
+                # Handle bytes
+                if isinstance(name, bytes):
+                    sig_names.append(name.decode('latin-1').strip('\x00'))
+                # Handle numpy bytes
+                elif hasattr(name, 'item'):  # numpy bytes
+                    try:
+                        sig_names.append(name.item().decode('latin-1').strip('\x00'))
+                    except:
+                        sig_names.append(str(name))
+                # Handle string
+                elif isinstance(name, str):
+                    sig_names.append(name.strip('\x00'))
+                # Handle anything else
+                else:
+                    sig_names.append(str(name))
+    except Exception as e:
+        raise Exception(f"Error processing sig_name: {e}. Type: {type(record.sig_name)}")
+    
+    # Pad with defaults if needed
+    while len(sig_names) < num_signals:
+        sig_names.append(f"Channel {len(sig_names)}")
+    
+    # Get units - handle ALL possible types
+    units = []
+    try:
+        if record.units is not None:
+            # Convert to list in case it's a numpy array or other iterable
+            units_iterable = list(record.units) if hasattr(record.units, '__iter__') else [record.units]
+            for unit in units_iterable:
+                # Handle bytes
+                if isinstance(unit, bytes):
+                    units.append(unit.decode('latin-1').strip('\x00'))
+                # Handle numpy bytes
+                elif hasattr(unit, 'item'):  # numpy bytes
+                    try:
+                        units.append(unit.item().decode('latin-1').strip('\x00'))
+                    except:
+                        units.append(str(unit))
+                # Handle string
+                elif isinstance(unit, str):
+                    units.append(unit.strip('\x00'))
+                # Handle anything else
+                else:
+                    units.append(str(unit))
+    except Exception as e:
+        raise Exception(f"Error processing units: {e}. Type: {type(record.units)}")
+    
+    # Pad with defaults if needed
+    while len(units) < num_signals:
+        units.append("mV")
     
     # Write EDF file
     with open(output_file, 'wb') as f:
@@ -160,34 +191,41 @@ def _write_basic_edf(record, output_file):
         
         # Signal headers (256 bytes each)
         for i in range(num_signals):
-            # Label (16 bytes)
-            label = (record.sig_name[i] if record.sig_name and i < len(record.sig_name) else f"Channel {i}")
-            f.write(label.encode('latin-1').ljust(16))
+            # Label (16 bytes) - encode FIRST, then pad
+            label = str(sig_names[i]) if i < len(sig_names) else f"Channel {i}"
+            label_bytes = label[:16].encode('latin-1').ljust(16)
+            f.write(label_bytes)
             
             # Transducer (80 bytes)
             f.write(b' ' * 80)
             
-            # Physical dimension (8 bytes)
-            unit = record.units[i] if record.units and i < len(record.units) else 'mV'
-            f.write(unit.encode('latin-1').ljust(8))
+            # Physical dimension (8 bytes) - encode FIRST, then pad
+            unit = str(units[i]) if i < len(units) else 'mV'
+            unit_bytes = unit[:8].encode('latin-1').ljust(8)
+            f.write(unit_bytes)
             
-            # Physical min (8 bytes)
-            f.write(str(physical_mins[i]).encode('latin-1').ljust(8))
+            # Physical min (8 bytes) - encode FIRST, then pad
+            phys_min = str(physical_mins[i])[:8].encode('latin-1').ljust(8)
+            f.write(phys_min)
             
-            # Physical max (8 bytes)
-            f.write(str(physical_maxs[i]).encode('latin-1').ljust(8))
+            # Physical max (8 bytes) - encode FIRST, then pad
+            phys_max = str(physical_maxs[i])[:8].encode('latin-1').ljust(8)
+            f.write(phys_max)
             
-            # Digital min (8 bytes)
-            f.write(str(int(digital_mins[i])).encode('latin-1').ljust(8))
+            # Digital min (8 bytes) - encode FIRST, then pad
+            dig_min = str(int(digital_mins[i]))[:8].encode('latin-1').ljust(8)
+            f.write(dig_min)
             
-            # Digital max (8 bytes)
-            f.write(str(int(digital_maxs[i])).encode('latin-1').ljust(8))
+            # Digital max (8 bytes) - encode FIRST, then pad
+            dig_max = str(int(digital_maxs[i]))[:8].encode('latin-1').ljust(8)
+            f.write(dig_max)
             
             # Prefiltering (80 bytes)
             f.write(b' ' * 80)
             
-            # Num samples in each data record (8 bytes)
-            f.write(str(num_samples).encode('latin-1').ljust(8))
+            # Num samples in each data record (8 bytes) - encode FIRST, then pad
+            num_samp = str(num_samples)[:8].encode('latin-1').ljust(8)
+            f.write(num_samp)
         
         # Write signal data
         # Convert to 16-bit digital values

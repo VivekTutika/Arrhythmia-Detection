@@ -80,4 +80,25 @@ export const deleteAllResults = async () => {
   return response.data;
 };
 
+// Convert MIT-BIH dataset
+export const convertMitbih = async () => {
+  const response = await apiClient.post('/api/convert-mitbih');
+  return response.data;
+};
+
+// Train model
+export const trainModel = async (datasetPath, epochs) => {
+  const response = await apiClient.post('/api/train-model', {
+    dataset_path: datasetPath,
+    epochs: epochs
+  });
+  return response.data;
+};
+
+// Get training status
+export const getTrainingStatus = async () => {
+  const response = await apiClient.get('/api/training-status');
+  return response.data;
+};
+
 export default apiClient;

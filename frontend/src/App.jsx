@@ -7,6 +7,7 @@ import Upload from './pages/Upload';
 import Results from './pages/Results';
 import History from './pages/History';
 import Settings from './pages/Settings';
+import ModelTraining from './pages/ModelTraining';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import LoadingSpinner from './components/LoadingSpinner';
@@ -60,6 +61,10 @@ function App() {
               <Route 
                 path="/settings" 
                 element={<Settings isLoading={isLoading} setIsLoading={setIsLoading} />} 
+              />
+              <Route 
+                path="/model-training" 
+                element={<ModelTraining isLoading={isLoading} setIsLoading={setIsLoading} />} 
               />
             </Routes>
           </div>
