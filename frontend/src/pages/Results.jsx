@@ -88,7 +88,7 @@ const Results = () => {
       const fileName = result.file_name || 'Unknown';
       // Convert to IST (UTC+5:30) for display
       const createdAt = new Date(result.created_at);
-      const displayOffset = 5.5 * 60 * 60 * 1000;
+      const displayOffset = 0;
       const displayDate = new Date(createdAt.getTime() + displayOffset);
       const analysisDate = displayDate.toLocaleDateString('en-US', { 
         year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'

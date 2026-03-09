@@ -56,7 +56,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
-        from enhanced_handles_file_with_training_classification_metrices import (
+        from backend.train_dsnn import (
             process_single_file, 
             extract_segments_sliding_window,
             DSNN,
@@ -86,19 +86,59 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         model.to(device)
         
         # Try to load trained model weights if available
-        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'dsnn_model.pth')
+        # Priority: 1) best_acc_model.pth (recommended), 2) best_loss_model.pth, 3) dsnn_model.pth (legacy)
+        models_dir = os.path.dirname(os.path.dirname(__file__))
+        model_path = os.path.join(models_dir, 'models', 'best_acc_model.pth')
+        
+        model_loaded = False
         if os.path.exists(model_path):
             try:
                 checkpoint = torch.load(model_path, map_location=device)
                 # Check if it's a checkpoint dict or state_dict
                 if 'model_state_dict' in checkpoint:
                     model.load_state_dict(checkpoint['model_state_dict'])
-                    logger.info(f"Loaded trained model weights from epoch {checkpoint.get('epoch', 'unknown')}")
+                    logger.info(f"✓ Using best_acc_model.pth - Loaded trained model weights from epoch {checkpoint.get('epoch', 'unknown')}")
                 else:
                     model.load_state_dict(checkpoint)
-                    logger.info("Loaded trained model weights")
+                    logger.info("✓ Using best_acc_model.pth - Loaded trained model weights")
+                model_loaded = True
             except Exception as e:
-                logger.warning(f"Could not load model weights: {e}. Using randomly initialized model.")
+                logger.warning(f"Could not load best_acc_model.pth: {e}")
+        
+        # Fallback to best_loss_model.pth if best_acc_model.pth not available
+        if not model_loaded:
+            model_path = os.path.join(models_dir, 'models', 'best_loss_model.pth')
+            if os.path.exists(model_path):
+                try:
+                    checkpoint = torch.load(model_path, map_location=device)
+                    if 'model_state_dict' in checkpoint:
+                        model.load_state_dict(checkpoint['model_state_dict'])
+                        logger.info(f"✓ Using best_loss_model.pth - Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
+                    else:
+                        model.load_state_dict(checkpoint)
+                        logger.info("✓ Using best_loss_model.pth - Loaded model weights")
+                    model_loaded = True
+                except Exception as e:
+                    logger.warning(f"Could not load best_loss_model.pth: {e}")
+        
+        # Fallback to legacy dsnn_model.pth if neither is available
+        if not model_loaded:
+            model_path = os.path.join(models_dir, 'models', 'dsnn_model.pth')
+            if os.path.exists(model_path):
+                try:
+                    checkpoint = torch.load(model_path, map_location=device)
+                    if 'model_state_dict' in checkpoint:
+                        model.load_state_dict(checkpoint['model_state_dict'])
+                        logger.info(f"⚠ Using legacy dsnn_model.pth - Loaded model")
+                    else:
+                        model.load_state_dict(checkpoint)
+                        logger.info("⚠ Using legacy dsnn_model.pth - Loaded model weights")
+                    model_loaded = True
+                except Exception as e:
+                    logger.warning(f"Could not load dsnn_model.pth: {e}")
+        
+        if not model_loaded:
+            logger.warning("⚠ No trained model found! Using randomly initialized model for inference.")
         
         model.eval()
         dsnn_system = DSNNSystem(model, device=device)

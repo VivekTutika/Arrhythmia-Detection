@@ -1,0 +1,33 @@
+[
+  {
+    "id": "fdf876c5-9c0d-47e1-a686-f369ea309b49",
+    "file_name": "1.edf",
+    "patient_id": "patient_1773042569270_0",
+    "status": "completed",
+    "created_at": "2026-03-09T13:19:29.560818",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 100.0,
+      "is_normal": true,
+      "segments_analyzed": 898,
+      "predictions": {
+        "Normal Sinus Rhythm": 100
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 67,
+      "rr_interval": 895,
+      "hrv": 27,
+      "p_wave": 0.106,
+      "qrs_complex": 0.061,
+      "qt_interval": 0.43
+    },
+    "recommendations": [
+      "Continue regular cardiac checkups",
+      "Maintain healthy lifestyle",
+      "No immediate medical intervention required"
+    ],
+    "patient_name": "John Doe",
+    "patient_age": "45"
+  }
+]

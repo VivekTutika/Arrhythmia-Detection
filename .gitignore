@@ -28,7 +28,6 @@ env/
 .venv
 
 # PyTorch
-*.pth
 *.pt
 *.onnx
 
@@ -49,20 +48,3 @@ frontend/dist/
 frontend/.env
 frontend/.env.local
 frontend/.env.example
-
-# Backend
-backend/uploads/
-backend/results/
-*.log
-
-# Model files (if large)
-models/*.pth
-models/*.pt
-
-# Data (large files)
-*.edf
-*.qrs
-!Dataset/edf/*.edf
-!Dataset/edf/*.qrs
-!Dataset/qrs/*.qrs
-
