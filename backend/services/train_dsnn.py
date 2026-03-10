@@ -303,10 +303,22 @@ def read_ecg_with_wfdb(base_path, file_name):
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        record_path = os.path.join(base_path, file_name)
         
+        # Check file extension to determine the best reading method
+        file_path = os.path.join(base_path, file_name)
+        
+        # First, try to read as EDF file using pyedflib (for .edf files)
+        if file_name.lower().endswith('.edf') or os.path.exists(file_path + '.edf'):
+            edf_path = file_path + '.edf' if not file_name.lower().endswith('.edf') else file_path
+            if os.path.exists(edf_path):
+                try:
+                    return read_edf_file(edf_path, file_name)
+                except Exception as e:
+                    print(f"pyedflib failed to read {file_name}: {e}")
+        
+        # Try wfdb for MIT-BIH format files (.hea + .dat)
         try:
-            record = wfdb.rdrecord(record_path)
+            record = wfdb.rdrecord(file_path)
             
             n_channels = record.n_sig
             signal_labels = record.sig_name if record.sig_name else [f"Channel {i}" for i in range(n_channels)]
@@ -332,7 +344,49 @@ def read_ecg_with_wfdb(base_path, file_name):
             
         except Exception as e:
             print(f"wfdb failed to read {file_name}: {e}")
+            
+            # Last resort: try pyedflib without extension (some EDF files don't have .edf extension)
+            try:
+                return read_edf_file(file_path, file_name)
+            except:
+                pass
+            
             return create_synthetic_ecg(file_name)
+
+
+def read_edf_file(file_path, file_name):
+    """Read EDF file using pyedflib"""
+    import pyedflib
+    
+    try:
+        # Remove extension from file_name for record_name
+        if file_name.lower().endswith('.edf'):
+            record_name = file_name[:-4]
+        else:
+            record_name = file_name
+            
+        with pyedflib.EdfReader(file_path) as f:
+            n_channels = f.signals_in_file
+            fs = f.samplefrequency(0)  # Assume all channels have same sampling frequency
+            
+            signals = []
+            signal_labels = []
+            
+            for i in range(n_channels):
+                signal = f.readSignal(i)
+                signals.append(signal)
+                label = f.getLabel(i)
+                signal_labels.append(label if label else f"Channel {i}")
+            
+            return {
+                'signals': signals,
+                'labels': signal_labels,
+                'fs': fs,
+                'n_channels': n_channels,
+                'record_name': record_name
+            }
+    except Exception as e:
+        raise Exception(f"Failed to read EDF file: {e}")
 
 
 def create_synthetic_ecg(file_name):
