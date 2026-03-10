@@ -3,11 +3,11 @@ Flask>=2.3.0
 Flask-CORS>=4.0.0
 Werkzeug>=2.3.0
 
-# Data Processing (using compatible versions - no pyedflib)
+# Data Processing (using compatible versions)
 numpy>=1.24.0
 pandas>=2.0.0
 wfdb>=4.1.0
-edfio>=0.2.0
+pyedflib>=0.1.30
 scipy>=1.11.0
 tqdm>=4.65.0
 

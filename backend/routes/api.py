@@ -20,7 +20,7 @@ STORAGE_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'results
 
 # Training status tracking (global variable)
 TRAINING_STATUS = {
-    'status': 'not_started',  # not_started, running, completed, failed
+    'status': 'not_started',  # not_started, running, completed, failed, stopped
     'progress': 0,
     'message': '',
     'error': None,
@@ -28,7 +28,9 @@ TRAINING_STATUS = {
     'end_time': None,
     'epochs': 0,
     'current_epoch': 0,
-    'image_files': []
+    'image_files': [],
+    'training_thread': None,
+    'training_process': None
 }
 
 # Allowed file extensions
@@ -671,10 +673,12 @@ def train_model():
                 TRAINING_STATUS['message'] = 'Training in progress...'
                 TRAINING_STATUS['progress'] = 80
                 
-                # Find generated image files
+                # Find generated image files in backend/images folder
+                images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
                 image_files = []
                 for f in ['training_history.png', 'confusion_matrix.png']:
-                    if os.path.exists(f):
+                    img_path = os.path.join(images_dir, f)
+                    if os.path.exists(img_path):
                         image_files.append('/images/' + f)
                 
                 # Copy model to backend/models as dsnn_model.pth
@@ -738,11 +742,31 @@ def training_status():
         models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
         model_exists = os.path.exists(os.path.join(models_dir, 'dsnn_model.pth'))
         
-        # If model exists but status is running, mark as completed
+        # Check for image files in the images directory
+        images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
+        image_files = []
+        for f in ['training_history.png', 'confusion_matrix.png']:
+            img_path = os.path.join(images_dir, f)
+            if os.path.exists(img_path):
+                image_files.append('/images/' + f)
+        
+        # If model exists but status is running, check if images also exist
         if model_exists and TRAINING_STATUS['status'] == 'running':
-            TRAINING_STATUS['status'] = 'completed'
-            TRAINING_STATUS['message'] = 'Training completed (model file found)'
-            TRAINING_STATUS['progress'] = 100
+            if image_files:
+                TRAINING_STATUS['status'] = 'completed'
+                TRAINING_STATUS['message'] = 'Training completed successfully!'
+                TRAINING_STATUS['progress'] = 100
+                TRAINING_STATUS['image_files'] = image_files
+            else:
+                # Training might still be running, check if thread is alive
+                if TRAINING_STATUS.get('training_thread') and not TRAINING_STATUS['training_thread'].is_alive():
+                    TRAINING_STATUS['status'] = 'stopped'
+                    TRAINING_STATUS['message'] = 'Training was stopped by user'
+                    TRAINING_STATUS['progress'] = 0
+        
+        # Update image files if we found them
+        if image_files:
+            TRAINING_STATUS['image_files'] = image_files
         
         return jsonify({
             'status': TRAINING_STATUS['status'],
@@ -757,4 +781,33 @@ def training_status():
         
     except Exception as e:
         logger.error(f"Error getting training status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/stop-training', methods=['POST'])
+def stop_training():
+    """
+    Stop the current training process
+    """
+    global TRAINING_STATUS
+    
+    try:
+        if TRAINING_STATUS['status'] != 'running':
+            return jsonify({
+                'success': False,
+                'message': 'No training is currently running'
+            }), 400
+        
+        # Mark as stopped - the training thread will check this flag
+        TRAINING_STATUS['status'] = 'stopped'
+        TRAINING_STATUS['message'] = 'Training stop requested...'
+        TRAINING_STATUS['progress'] = 0
+        
+        return jsonify({
+            'success': True,
+            'message': 'Training stop requested. The training will stop after the current epoch.'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping training: {e}")
         return jsonify({'error': str(e)}), 500

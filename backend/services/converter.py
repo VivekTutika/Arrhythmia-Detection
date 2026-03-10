@@ -1,17 +1,19 @@
 """
 MIT-BIH to EDF/QRS Converter
 Batch conversion of MIT-BIH dataset files to EDF format and QRS annotations.
+Uses wfdb for reading MIT-BIH files and pyedflib for writing EDF files.
 """
 import os
 import numpy as np
 import wfdb
+import pyedflib
+from datetime import datetime
 from pathlib import Path
 
 
-# Base paths
+# Base paths - output to MIT-BIH folder (same as source files)
 MITBIH_BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Dataset', 'MIT-BIH')
-EDF_OUTPUT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Dataset', 'edf')
-QRS_OUTPUT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Dataset', 'qrs')
+OUTPUT_BASE = MITBIH_BASE  # Both EDF and QRS go to MIT-BIH folder
 
 
 def get_mitbih_files():
@@ -36,35 +38,128 @@ def get_mitbih_files():
     return sorted(record_names)
 
 
-def convert_dat_hea_to_edf(record_name, mitbih_base=None, edf_output=None):
+def _safe_str(value):
+    """Safely convert any value to string"""
+    if value is None:
+        return ""
+    # If already a string
+    if isinstance(value, str):
+        return str(value).strip()
+    # If bytes
+    if isinstance(value, bytes):
+        try:
+            return value.decode('utf-8').strip()
+        except:
+            return str(value)
+    # If numpy bytes or other numpy types
+    if hasattr(value, 'item'):
+        try:
+            return str(value.item())
+        except:
+            return str(value)
+    # If numpy array
+    if hasattr(value, 'tolist'):
+        return str(value.tolist())
+    # Anything else
+    return str(value)
+
+
+def convert_dat_hea_to_edf(record_name, mitbih_base=None, output_base=None):
     """
     Convert a single MIT-BIH record (.hea + .dat) to EDF format.
+    Uses wfdb for reading and pyedflib for writing EDF.
     
     Args:
         record_name: Base name of the MIT-BIH record (e.g., '100')
         mitbih_base: Path to MIT-BIH dataset folder
-        edf_output: Path to output EDF folder
+        output_base: Path to output folder (defaults to MIT-BIH folder)
     
     Returns:
         dict: Status with 'success', 'message', and 'output_file' keys
     """
     if mitbih_base is None:
         mitbih_base = MITBIH_BASE
-    if edf_output is None:
-        edf_output = EDF_OUTPUT
+    if output_base is None:
+        output_base = OUTPUT_BASE
     
     try:
         # Read the record using wfdb
         record_path = os.path.join(mitbih_base, record_name)
         record = wfdb.rdrecord(record_path)
         
-        # Create output directory if not exists
-        os.makedirs(edf_output, exist_ok=True)
+        # Create output directory if not exists (same as MIT-BIH folder)
+        os.makedirs(output_base, exist_ok=True)
         
-        output_file = os.path.join(edf_output, f"{record_name}.edf")
+        output_file = os.path.join(output_base, f"{record_name}.edf")
         
-        # Always use the basic EDF writer - it's more reliable
-        _write_basic_edf(record, output_file)
+        # Get signal data
+        if record.p_signal is not None:
+            signals = record.p_signal
+        else:
+            signals = record.d_signal.astype(np.float32)
+        
+        # Get number of signals
+        num_signals = signals.shape[1] if signals.ndim > 1 else 1
+        
+        # Handle single channel case
+        if signals.ndim == 1:
+            signals = signals.reshape(-1, 1)
+        
+        # Get sampling frequency
+        fs = int(record.fs)
+        
+        # Get signal names and units
+        sig_names = record.sig_name if record.sig_name else []
+        units = record.units if record.units else []
+        
+        # Create EDF file writer with correct file type
+        file_type = pyedflib.FILETYPE_EDF
+        f = pyedflib.EdfWriter(output_file, num_signals, file_type)
+        
+        # Set file info
+        f.setPatientName('')
+        f.setPatientCode('')
+        f.setGender(0)
+        f.setBirthdate(datetime(2024, 1, 1))
+        f.setStartdatetime(datetime(2024, 1, 1, 0, 0, 0))
+        
+        # Set channel info and write signals
+        for i in range(num_signals):
+            # Get signal name
+            if i < len(sig_names):
+                label = _safe_str(sig_names[i])[:16]
+            else:
+                label = f"Channel {i+1}"
+            
+            # Get unit
+            if i < len(units):
+                unit = _safe_str(units[i])[:8]
+            else:
+                unit = "mV"
+            
+            # Get physical min/max
+            physical_min = float(np.min(signals[:, i]))
+            physical_max = float(np.max(signals[:, i]))
+            
+            # Ensure non-zero range
+            if physical_max == physical_min:
+                physical_max = physical_min + 1
+            
+            # Set channel properties
+            f.setLabel(i, label)
+            f.setPhysicalDimension(i, unit)
+            f.setPhysicalMinimum(i, physical_min)
+            f.setPhysicalMaximum(i, physical_max)
+            f.setDigitalMinimum(i, -32768)
+            f.setDigitalMaximum(i, 32767)
+            f.setPrefilter(i, '')
+            f.setTransducer(i, '')
+            
+            # Write signal data
+            f.writePhysicalSamples(signals[:, i])
+        
+        # Close the file
+        f.close()
         
         return {
             'success': True,
@@ -80,189 +175,32 @@ def convert_dat_hea_to_edf(record_name, mitbih_base=None, edf_output=None):
         }
 
 
-def _write_basic_edf(record, output_file):
-    """
-    Write a basic EDF file from wfdb record without edfio.
-    This is a simplified implementation for compatibility.
-    """
-    # Get signal data
-    try:
-        if record.p_signal is not None:
-            signals = record.p_signal.astype(np.float32)
-        else:
-            signals = record.d_signal.astype(np.float32)
-    except Exception as e:
-        raise Exception(f"Error getting signal data: {e}")
-    
-    num_signals = signals.shape[1] if signals.ndim > 1 else 1
-    num_samples = signals.shape[0]
-    
-    # EDF header size is 256 bytes + num_signals * 256 bytes
-    header_size = 256 + num_signals * 256
-    
-    # Handle single channel case
-    if num_signals == 1:
-        signals = signals.reshape(-1, 1)
-    
-    # Calculate min/max for each channel
-    physical_mins = np.min(signals, axis=0)
-    physical_maxs = np.max(signals, axis=0)
-    
-    # Ensure non-zero range
-    for i in range(num_signals):
-        if physical_maxs[i] == physical_mins[i]:
-            physical_maxs[i] = physical_mins[i] + 1
-    
-    digital_mins = np.iinfo(np.int16).min * np.ones(num_signals)
-    digital_maxs = np.iinfo(np.int16).max * np.ones(num_signals)
-    
-    # Get signal names - handle ALL possible types
-    sig_names = []
-    try:
-        if record.sig_name is not None:
-            # Convert to list in case it's a numpy array or other iterable
-            sig_name_iterable = list(record.sig_name) if hasattr(record.sig_name, '__iter__') else [record.sig_name]
-            for name in sig_name_iterable:
-                # Handle bytes
-                if isinstance(name, bytes):
-                    sig_names.append(name.decode('latin-1').strip('\x00'))
-                # Handle numpy bytes
-                elif hasattr(name, 'item'):  # numpy bytes
-                    try:
-                        sig_names.append(name.item().decode('latin-1').strip('\x00'))
-                    except:
-                        sig_names.append(str(name))
-                # Handle string
-                elif isinstance(name, str):
-                    sig_names.append(name.strip('\x00'))
-                # Handle anything else
-                else:
-                    sig_names.append(str(name))
-    except Exception as e:
-        raise Exception(f"Error processing sig_name: {e}. Type: {type(record.sig_name)}")
-    
-    # Pad with defaults if needed
-    while len(sig_names) < num_signals:
-        sig_names.append(f"Channel {len(sig_names)}")
-    
-    # Get units - handle ALL possible types
-    units = []
-    try:
-        if record.units is not None:
-            # Convert to list in case it's a numpy array or other iterable
-            units_iterable = list(record.units) if hasattr(record.units, '__iter__') else [record.units]
-            for unit in units_iterable:
-                # Handle bytes
-                if isinstance(unit, bytes):
-                    units.append(unit.decode('latin-1').strip('\x00'))
-                # Handle numpy bytes
-                elif hasattr(unit, 'item'):  # numpy bytes
-                    try:
-                        units.append(unit.item().decode('latin-1').strip('\x00'))
-                    except:
-                        units.append(str(unit))
-                # Handle string
-                elif isinstance(unit, str):
-                    units.append(unit.strip('\x00'))
-                # Handle anything else
-                else:
-                    units.append(str(unit))
-    except Exception as e:
-        raise Exception(f"Error processing units: {e}. Type: {type(record.units)}")
-    
-    # Pad with defaults if needed
-    while len(units) < num_signals:
-        units.append("mV")
-    
-    # Write EDF file
-    with open(output_file, 'wb') as f:
-        # Main header (256 bytes)
-        f.write(b'0       ')  # EDF magic number
-        f.write(b' ' * 80)    # Patient ID (space-padded)
-        f.write(b' ' * 80)    # Recording info
-        f.write(b'01.01.00'.encode('latin-1'))  # Start date
-        f.write(b'00.00.00'.encode('latin-1'))  # Start time
-        header_bytes = str(header_size).encode('latin-1').ljust(8)
-        f.write(header_bytes)
-        f.write(b' ' * 44)    # Reserved
-        f.write(b'1'.encode('latin-1').ljust(8))  # Num data records (1 for simplicity)
-        f.write(str(num_samples).encode('latin-1').ljust(8))  # Data record duration (samples)
-        f.write(str(num_signals).encode('latin-1').ljust(4))  # Num signals
-        
-        # Signal headers (256 bytes each)
-        for i in range(num_signals):
-            # Label (16 bytes) - encode FIRST, then pad
-            label = str(sig_names[i]) if i < len(sig_names) else f"Channel {i}"
-            label_bytes = label[:16].encode('latin-1').ljust(16)
-            f.write(label_bytes)
-            
-            # Transducer (80 bytes)
-            f.write(b' ' * 80)
-            
-            # Physical dimension (8 bytes) - encode FIRST, then pad
-            unit = str(units[i]) if i < len(units) else 'mV'
-            unit_bytes = unit[:8].encode('latin-1').ljust(8)
-            f.write(unit_bytes)
-            
-            # Physical min (8 bytes) - encode FIRST, then pad
-            phys_min = str(physical_mins[i])[:8].encode('latin-1').ljust(8)
-            f.write(phys_min)
-            
-            # Physical max (8 bytes) - encode FIRST, then pad
-            phys_max = str(physical_maxs[i])[:8].encode('latin-1').ljust(8)
-            f.write(phys_max)
-            
-            # Digital min (8 bytes) - encode FIRST, then pad
-            dig_min = str(int(digital_mins[i]))[:8].encode('latin-1').ljust(8)
-            f.write(dig_min)
-            
-            # Digital max (8 bytes) - encode FIRST, then pad
-            dig_max = str(int(digital_maxs[i]))[:8].encode('latin-1').ljust(8)
-            f.write(dig_max)
-            
-            # Prefiltering (80 bytes)
-            f.write(b' ' * 80)
-            
-            # Num samples in each data record (8 bytes) - encode FIRST, then pad
-            num_samp = str(num_samples)[:8].encode('latin-1').ljust(8)
-            f.write(num_samp)
-        
-        # Write signal data
-        # Convert to 16-bit digital values
-        for i in range(num_signals):
-            digital_values = ((signals[:, i] - physical_mins[i]) / 
-                             (physical_maxs[i] - physical_mins[i]) * 
-                             (digital_maxs[i] - digital_mins[i]) + digital_mins[i])
-            digital_values = np.clip(digital_values, digital_mins[i], digital_maxs[i]).astype(np.int16)
-            f.write(digital_values.tobytes())
-
-
-def convert_atr_to_qrs(record_name, mitbih_base=None, qrs_output=None):
+def convert_atr_to_qrs(record_name, mitbih_base=None, output_base=None):
     """
     Convert a single MIT-BIH annotation (.atr) file to QRS format.
     
     Args:
         record_name: Base name of the MIT-BIH record (e.g., '100')
         mitbih_base: Path to MIT-BIH dataset folder
-        qrs_output: Path to output QRS folder
+        output_base: Path to output folder (defaults to MIT-BIH folder)
     
     Returns:
         dict: Status with 'success', 'message', and 'output_file' keys
     """
     if mitbih_base is None:
         mitbih_base = MITBIH_BASE
-    if qrs_output is None:
-        qrs_output = QRS_OUTPUT
+    if output_base is None:
+        output_base = OUTPUT_BASE
     
     try:
         # Read the annotation file using wfdb
         annotation_path = os.path.join(mitbih_base, record_name)
         annotation = wfdb.rdann(annotation_path, 'atr')
         
-        # Create output directory if not exists
-        os.makedirs(qrs_output, exist_ok=True)
+        # Create output directory if not exists (same as MIT-BIH folder)
+        os.makedirs(output_base, exist_ok=True)
         
-        output_file = os.path.join(qrs_output, f"{record_name}.qrs")
+        output_file = os.path.join(output_base, f"{record_name}.qrs")
         
         # Write QRS peak sample locations
         # QRS format: sample number of each R-peak (one per line)
@@ -307,17 +245,18 @@ def convert_all_mitbih_files():
     for record_name in record_names:
         print(f"Processing: {record_name}")
         
-        # Convert to EDF
-        edf_result = convert_dat_hea_to_edf(record_name)
+        # Convert to EDF (output to MIT-BIH folder)
+        edf_result = convert_dat_hea_to_edf(record_name, output_base=OUTPUT_BASE)
         if edf_result['success']:
             results['edf']['success'] += 1
             results['edf']['files'].append(edf_result['output_file'])
+            print(f"  EDF: OK")
         else:
             results['edf']['failed'] += 1
             print(f"  EDF: FAILED - {edf_result['message']}")
         
-        # Convert to QRS
-        qrs_result = convert_atr_to_qrs(record_name)
+        # Convert to QRS (output to MIT-BIH folder)
+        qrs_result = convert_atr_to_qrs(record_name, output_base=OUTPUT_BASE)
         if qrs_result['success']:
             results['qrs']['success'] += 1
             results['qrs']['files'].append(qrs_result['output_file'])
@@ -345,8 +284,8 @@ def convert_single_record(record_name):
     Returns:
         dict: Combined results for EDF and QRS conversion
     """
-    edf_result = convert_dat_hea_to_edf(record_name)
-    qrs_result = convert_atr_to_qrs(record_name)
+    edf_result = convert_dat_hea_to_edf(record_name, output_base=OUTPUT_BASE)
+    qrs_result = convert_atr_to_qrs(record_name, output_base=OUTPUT_BASE)
     
     return {
         'edf': edf_result,

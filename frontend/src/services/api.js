@@ -101,4 +101,10 @@ export const getTrainingStatus = async () => {
   return response.data;
 };
 
+// Stop training
+export const stopTraining = async () => {
+  const response = await apiClient.post('/api/stop-training');
+  return response.data;
+};
+
 export default apiClient;

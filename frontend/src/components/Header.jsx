@@ -6,6 +6,7 @@ const pageTitles = {
   '/upload': 'Upload ECG',
   '/history': 'Analysis History',
   '/settings': 'Settings',
+  '/model-training': 'Model Training',
 };
 
 const Header = ({ toggleSidebar, toggleTheme, theme }) => {
