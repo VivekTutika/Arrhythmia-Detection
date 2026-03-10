@@ -14,7 +14,7 @@ import {
 import { convertMitbih, trainModel, getTrainingStatus } from '../services/api';
 
 const ModelTraining = ({ isLoading, setIsLoading }) => {
-  const [activeTab, setActiveTab] = useState('preprocessing');
+  const [activeTab, setActiveTab] = useState('training');
   const [converting, setConverting] = useState(false);
   const [conversionResult, setConversionResult] = useState(null);
   const [training, setTraining] = useState(false);

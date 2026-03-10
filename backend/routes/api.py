@@ -18,6 +18,19 @@ api_bp = Blueprint('api', __name__)
 # Storage file path
 STORAGE_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'results.json')
 
+# Training status tracking (global variable)
+TRAINING_STATUS = {
+    'status': 'not_started',  # not_started, running, completed, failed
+    'progress': 0,
+    'message': '',
+    'error': None,
+    'start_time': None,
+    'end_time': None,
+    'epochs': 0,
+    'current_epoch': 0,
+    'image_files': []
+}
+
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {'edf', 'qrs', 'dat'}
 
@@ -577,6 +590,8 @@ def train_model():
     """
     Train the DSNN model with given parameters
     """
+    global TRAINING_STATUS
+    
     try:
         import sys
         import threading
@@ -588,6 +603,14 @@ def train_model():
         dataset_path = data.get('dataset_path', 'Dataset/edf')
         epochs = int(data.get('epochs', 50))
         
+        # Convert relative path to absolute path if needed
+        if not os.path.isabs(dataset_path):
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(current_dir))
+            dataset_path = os.path.join(project_root, dataset_path)
+        
+        logger.info(f"Dataset path resolved to: {dataset_path}")
+        
         # Validate dataset path
         if not os.path.exists(dataset_path):
             return jsonify({'error': f'Dataset path does not exist: {dataset_path}'}), 400
@@ -598,17 +621,29 @@ def train_model():
         if not edf_files:
             return jsonify({'error': 'No EDF files found in the dataset path'}), 400
         
-        # Create a queue to store training progress
-        progress_queue = []
+        # Reset and update training status
+        TRAINING_STATUS['status'] = 'running'
+        TRAINING_STATUS['progress'] = 0
+        TRAINING_STATUS['message'] = 'Starting training...'
+        TRAINING_STATUS['error'] = None
+        TRAINING_STATUS['start_time'] = datetime.now().isoformat()
+        TRAINING_STATUS['epochs'] = epochs
+        TRAINING_STATUS['current_epoch'] = 0
+        TRAINING_STATUS['image_files'] = []
 
         def run_training():
             """Run training in a separate thread"""
+            global TRAINING_STATUS
             try:
-                # Import training module - use relative import after adding to path
+                # Import training module
                 from services.train_dsnn import main as train_main
                 import matplotlib
-                matplotlib.use('Agg')  # Use non-interactive backend
+                matplotlib.use('Agg')
                 import matplotlib.pyplot as plt
+                
+                # Update status
+                TRAINING_STATUS['message'] = 'Loading data and initializing model...'
+                TRAINING_STATUS['progress'] = 5
                 
                 # Capture output
                 old_stdout = sys.stdout
@@ -632,17 +667,20 @@ def train_model():
                 # Get training output
                 training_output = mystdout.getvalue()
                 
+                # Update progress during training
+                TRAINING_STATUS['message'] = 'Training in progress...'
+                TRAINING_STATUS['progress'] = 80
+                
                 # Find generated image files
                 image_files = []
                 for f in ['training_history.png', 'confusion_matrix.png']:
                     if os.path.exists(f):
                         image_files.append('/images/' + f)
                 
-                # Copy model to backend/models as dsnn_model.pth (replace existing)
+                # Copy model to backend/models as dsnn_model.pth
                 models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
                 os.makedirs(models_dir, exist_ok=True)
                 
-                # Find the best model and copy it
                 for model_name in ['best_acc_model.pth', 'best_loss_model.pth']:
                     src_path = os.path.join(models_dir, model_name)
                     if os.path.exists(src_path):
@@ -651,17 +689,21 @@ def train_model():
                         shutil.copy2(src_path, dst_path)
                         break
                 
-                progress_queue.append({
-                    'success': True,
-                    'output': training_output,
-                    'image_files': image_files
-                })
+                # Update training status to completed
+                TRAINING_STATUS['status'] = 'completed'
+                TRAINING_STATUS['progress'] = 100
+                TRAINING_STATUS['message'] = 'Training completed successfully!'
+                TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+                TRAINING_STATUS['image_files'] = image_files
+                
+                logger.info("Training completed successfully!")
                 
             except Exception as e:
-                progress_queue.append({
-                    'success': False,
-                    'error': str(e)
-                })
+                logger.error(f"Training error: {e}")
+                TRAINING_STATUS['status'] = 'failed'
+                TRAINING_STATUS['error'] = str(e)
+                TRAINING_STATUS['message'] = f'Training failed: {str(e)}'
+                TRAINING_STATUS['end_time'] = datetime.now().isoformat()
         
         # Start training in background thread
         training_thread = threading.Thread(target=run_training)
@@ -679,6 +721,8 @@ def train_model():
         
     except Exception as e:
         logger.error(f"Error starting training: {e}")
+        TRAINING_STATUS['status'] = 'failed'
+        TRAINING_STATUS['error'] = str(e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -687,24 +731,27 @@ def training_status():
     """
     Get training status and results
     """
+    global TRAINING_STATUS
+    
     try:
-        # Check if training is still running
-        # For simplicity, return a status indicating completion
-        # In production, you'd use a more robust method
-        
-        # Find generated image files
-        image_files = []
-        for f in ['training_history.png', 'confusion_matrix.png']:
-            if os.path.exists(f):
-                image_files.append('/images/' + f)
-        
         # Check for model files
         models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
         model_exists = os.path.exists(os.path.join(models_dir, 'dsnn_model.pth'))
         
+        # If model exists but status is running, mark as completed
+        if model_exists and TRAINING_STATUS['status'] == 'running':
+            TRAINING_STATUS['status'] = 'completed'
+            TRAINING_STATUS['message'] = 'Training completed (model file found)'
+            TRAINING_STATUS['progress'] = 100
+        
         return jsonify({
-            'status': 'completed' if model_exists else 'not_started',
-            'image_files': image_files,
+            'status': TRAINING_STATUS['status'],
+            'progress': TRAINING_STATUS['progress'],
+            'message': TRAINING_STATUS['message'],
+            'error': TRAINING_STATUS['error'],
+            'epochs': TRAINING_STATUS['epochs'],
+            'current_epoch': TRAINING_STATUS['current_epoch'],
+            'image_files': TRAINING_STATUS['image_files'],
             'model_exists': model_exists
         })
         
