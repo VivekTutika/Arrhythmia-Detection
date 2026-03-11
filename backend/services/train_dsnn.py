@@ -14,6 +14,12 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import seaborn as sns
 from tqdm import tqdm
+import logging
+from scipy import signal as scipy_signal
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Set random seeds for reproducibility
 np.random.seed(42)
@@ -26,6 +32,95 @@ MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'images')
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# ------- AAMI ANNOTATION MAPPING -------
+# Maps MIT-BIH .atr annotation symbols to model class indices.
+# This follows the AAMI (Association for the Advancement of Medical Instrumentation) standard.
+AAMI_SYMBOL_TO_CLASS = {
+    # Class 0: Normal Sinus Rhythm
+    'N': 0, 'L': 0, 'R': 0, 'e': 0, 'j': 0,
+    # Class 1: Atrial Fibrillation / Supraventricular
+    'A': 1, 'a': 1, 'J': 1, 'S': 1,
+    # Class 2: Ventricular Arrhythmia
+    'V': 2, 'E': 2,
+    # Class 3: Conduction Block / Fusion
+    'F': 3,
+    # Class 4: Premature Contraction / Paced
+    '/': 4, 'f': 4,
+}
+
+# Non-beat annotation symbols to skip (not actual heartbeats)
+NON_BEAT_SYMBOLS = {'+', '~', '!', '|', 'x', '"', '[', ']', 'Q'}
+
+# 8 strategically chosen test records ensuring all 5 AAMI classes are represented.
+# These records are NEVER used for training — only for evaluation.
+TEST_RECORDS = ['101', '200', '207', '209', '213', '217', '222', '228']
+
+AAMI_CLASS_NAMES = {
+    0: "Normal Sinus Rhythm",
+    1: "Atrial Fibrillation",
+    2: "Ventricular Arrhythmia",
+    3: "Conduction Block",
+    4: "Premature Contraction",
+    5: "ST Segment Abnormality"
+}
+
+# --- SIGNAL PRE-PROCESSING UTILITIES ---
+
+class SignalPreprocessor:
+    """Standardized ECG pre-processing to improve model generalization."""
+    
+    @staticmethod
+    def bandpass_filter(data, lowcut=0.5, highcut=40.0, fs=360, order=4):
+        """Apply Butterworth bandpass filter to remove baseline wander and high-frequency noise."""
+        nyq = 0.5 * fs
+        low = lowcut / nyq
+        high = highcut / nyq
+        b, a = scipy_signal.butter(order, [low, high], btype='both')
+        # Use filtfilt for zero-phase distortion (important for SNN spike timing)
+        return scipy_signal.filtfilt(b, a, data)
+
+    @staticmethod
+    def normalize_zscore(segment):
+        """Standardize a segment using Z-score (mean=0, std=1). 
+        Critical for cross-patient amplitude variations."""
+        mean = np.mean(segment, axis=-1, keepdims=True)
+        std = np.std(segment, axis=-1, keepdims=True) + 1e-8
+        return (segment - mean) / std
+
+    @staticmethod
+    def process(leads, fs=360):
+        """Filter and normalize leads."""
+        processed_leads = []
+        for lead in leads:
+            # 1. Filter
+            filtered = SignalPreprocessor.bandpass_filter(lead, fs=fs)
+            processed_leads.append(filtered)
+        
+        # We don't Z-score the full lead yet; we do it per-segment for better local focus
+        return np.array(processed_leads)
+
+# --- LOSS FUNCTIONS ---
+
+class FocalLoss(nn.Module):
+    """Focal Loss to address class imbalance by focusing on 'hard' examples."""
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+        self.alpha = alpha # Usually class weights
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none', weight=self.alpha)
+        pt = torch.exp(-ce_loss)
+        focal_loss = (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 # ------- PART 1: DSNN MODEL DEFINITIONS -------
 
@@ -79,35 +174,40 @@ class DSNNSystem:
             outputs = self.model(batch)
             _, predictions = torch.max(outputs, 1)
         return predictions
-    
-    def train_model(self, train_loader, val_loader, epochs=2000, lr=0.01, weight_decay=1e-5, 
-                    class_weights=None):
+        
+    def train_model(self, train_loader, val_loader, epochs=50, lr=0.001, weight_decay=1e-5, 
+                    class_weights=None, stop_event=None, progress_callback=None):
+        """
+        Modified training loop using Focal Loss and optimized learning rate.
+        Designed to reach >90% metrics by focusing on 'hard' misclassified beats.
+        """
         self.model.train()
-    
-        optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
-    
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5 #, verbose=True
-        )
-    
+        
+        # 1. Initialize Weighted Focal Loss
         if class_weights is not None:
-            class_weights = torch.FloatTensor(class_weights).to(self.device)
-            criterion = nn.CrossEntropyLoss(weight=class_weights)
-            print(f"Using weighted loss with weights: {class_weights}")
+            alpha = torch.FloatTensor(class_weights).to(self.device)
+            criterion = FocalLoss(alpha=alpha, gamma=2.0)
+            print(f"✓ Using Focal Loss with class weights: {class_weights}")
         else:
-            criterion = nn.CrossEntropyLoss()
-    
-        best_val_loss = float('inf')
+            criterion = FocalLoss(gamma=2.0)
+            print("✓ Using Focal Loss (Unweighted)")
+            
+        # 2. Optimization setup
+        optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
+        
         best_val_acc = 0.0
-        training_history = {
-            'train_loss': [],
-            'train_acc': [],
-            'val_loss': [],
-            'val_acc': []
-        }
-    
-        print(f"Starting training for {epochs} epochs...")
+        training_history = []
+        
+        print(f"Starting optimized training for {epochs} epochs...")
+        
         for epoch in range(epochs):
+            # Check if training should be stopped by user
+            if stop_event is not None and stop_event.is_set():
+                print(f"\nTraining stopped by user at epoch {epoch+1}")
+                break
+
+            # --- TRAINING PHASE ---
             self.model.train()
             train_loss = 0.0
             train_correct = 0
@@ -115,26 +215,29 @@ class DSNNSystem:
         
             for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} - Training"):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
+                
                 optimizer.zero_grad()
                 outputs = self.model(inputs)
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
+                
                 train_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
                 train_total += labels.size(0)
                 train_correct += (predicted == labels).sum().item()
         
-            train_loss = train_loss / len(train_loader)
+            avg_train_loss = train_loss / len(train_loader)
             train_acc = 100 * train_correct / train_total
         
+            # --- VALIDATION PHASE ---
             self.model.eval()
             val_loss = 0.0
             val_correct = 0
             val_total = 0
         
             with torch.no_grad():
-                for inputs, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} - Validation"):
+                for inputs, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} - Validating"):
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
                     outputs = self.model(inputs)
                     loss = criterion(outputs, labels)
@@ -143,55 +246,67 @@ class DSNNSystem:
                     val_total += labels.size(0)
                     val_correct += (predicted == labels).sum().item()
             
-            val_loss = val_loss / len(val_loader)
+            avg_val_loss = val_loss / len(val_loader)
             val_acc = 100 * val_correct / val_total
-        
-            scheduler.step(val_loss)
-        
-            print(f"Epoch {epoch+1}/{epochs}: "
-                    f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
-                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-        
-            training_history['train_loss'].append(train_loss)
-            training_history['train_acc'].append(train_acc)
-            training_history['val_loss'].append(val_loss)
-            training_history['val_acc'].append(val_acc)
-        
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                loss_model_path = os.path.join(MODELS_DIR, 'best_loss_model.pth')
+            
+            # --- PROGRESS TRACKING ---
+            training_history['train_loss'].append(round(avg_train_loss, 4))
+            training_history['train_acc'].append(round(train_acc, 2))
+            training_history['val_loss'].append(round(avg_val_loss, 4))
+            training_history['val_acc'].append(round(val_acc, 2))
+            
+            # Report progress via callback for the UI
+            if progress_callback:
+                progress_callback(epoch + 1, epochs, avg_train_loss, train_acc, avg_val_loss, val_acc)
+            
+            # Update learning rate based on Validation Accuracy
+            scheduler.step(val_acc)
+            
+            # Save checkpoints for best LOSS model
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
                 torch.save({
-                    'epoch': epoch,
+                    'epoch': epoch + 1,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'val_loss': val_loss,
-                    'val_acc': val_acc
-                }, loss_model_path)
-                print(f"Saved best loss model checkpoint to backend/models/ (val_loss: {val_loss:.4f})")
-        
+                    'val_loss': avg_val_loss,
+                    'val_acc': val_acc,
+                }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth'))
+                print(f"📉 New best validation loss: {avg_val_loss:.4f} (Saved)")
+
+            # Save checkpoints for best ACCURACY model
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                acc_model_path = os.path.join(MODELS_DIR, 'best_acc_model.pth')
                 torch.save({
-                    'epoch': epoch,
+                    'epoch': epoch + 1,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'val_loss': val_loss,
-                    'val_acc': val_acc
-                }, acc_model_path)
-                print(f"Saved best accuracy model checkpoint to backend/models/ (val_acc: {val_acc:.2f}%)")
-            
-                if val_acc >= 95.0:
-                    print(f"Reached target accuracy of {val_acc:.2f}% at epoch {epoch+1}, but continuing training")
-    
-        acc_model_path = os.path.join(MODELS_DIR, 'best_acc_model.pth')
-        checkpoint = torch.load(acc_model_path)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded best accuracy model from epoch {checkpoint['epoch']+1} with validation accuracy {checkpoint['val_acc']:.2f}%")
-    
+                    'val_loss': avg_val_loss,
+                    'val_acc': val_acc,
+                }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth'))
+                print(f"⭐ New best validation accuracy: {val_acc:.2f}% (Saved)")
+
+        # After training, load the best accuracy model for final evaluation returns
+        best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth')
+        if os.path.exists(best_path):
+            checkpoint = torch.load(best_path)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded best accuracy model from epoch {checkpoint['epoch']} for final evaluation.")
+
         self._plot_training_history(training_history)
-    
-        return training_history
+        
+        # Return the history in a format compatible with the UI expectations
+        formatted_history = []
+        for i in range(len(training_history['train_loss'])):
+            formatted_history.append({
+                'epoch': i + 1,
+                'train_loss': training_history['train_loss'][i],
+                'train_acc': training_history['train_acc'][i],
+                'val_loss': training_history['val_loss'][i],
+                'val_acc': training_history['val_acc'][i]
+            })
+            
+        return {'history': formatted_history}
     
     def _plot_training_history(self, history):
         plt.figure(figsize=(12, 5))
@@ -307,16 +422,15 @@ def read_ecg_with_wfdb(base_path, file_name):
         # Check file extension to determine the best reading method
         file_path = os.path.join(base_path, file_name)
         
-        # First, try to read as EDF file using pyedflib (for .edf files)
-        if file_name.lower().endswith('.edf') or os.path.exists(file_path + '.edf'):
-            edf_path = file_path + '.edf' if not file_name.lower().endswith('.edf') else file_path
-            if os.path.exists(edf_path):
-                try:
-                    return read_edf_file(edf_path, file_name)
-                except Exception as e:
-                    print(f"pyedflib failed to read {file_name}: {e}")
+        # First, try EDF file using pyedflib (primary format for training)
+        edf_path = file_path + '.edf' if not file_name.lower().endswith('.edf') else file_path
+        if os.path.exists(edf_path):
+            try:
+                return read_edf_file(edf_path, file_name)
+            except Exception as e:
+                print(f"pyedflib failed to read {file_name}: {e}")
         
-        # Try wfdb for MIT-BIH format files (.hea + .dat)
+        # Fall back to wfdb for MIT-BIH format files (.hea + .dat)
         try:
             record = wfdb.rdrecord(file_path)
             
@@ -343,14 +457,7 @@ def read_ecg_with_wfdb(base_path, file_name):
             }
             
         except Exception as e:
-            print(f"wfdb failed to read {file_name}: {e}")
-            
-            # Last resort: try pyedflib without extension (some EDF files don't have .edf extension)
-            try:
-                return read_edf_file(file_path, file_name)
-            except:
-                pass
-            
+            print(f"All readers failed for {file_name}: {e}")
             return create_synthetic_ecg(file_name)
 
 
@@ -456,11 +563,9 @@ def process_single_file(base_path, file_name, using_sliding_window=False, num_ch
         print(f"Error: File {file_name} does not have any channels, skipping")
         return None
     
-    leads = leads[:channels_to_use]
-    signal_labels = signal_labels[:channels_to_use]
-    
-    for i in range(channels_to_use):
-        print(f"Lead {i+1} ({signal_labels[i]}) length: {len(leads[i])}")
+    # Signal Processing Enhancement: Apply Bandpass Filter
+    leads = SignalPreprocessor.process(leads, fs=fs)
+    print(f"Applied 0.5-40Hz Bandpass filter to removing baseline wander and noise.")
     
     lead_config = determine_lead_configuration(signal_labels)
     print(f"Detected lead configuration: {lead_config}")
@@ -469,24 +574,60 @@ def process_single_file(base_path, file_name, using_sliding_window=False, num_ch
     using_qrs = False
     r_peaks = []
     
-    if not using_sliding_window:
-        try:
-            print("Attempting to load QRS annotations...")
-            ann = wfdb.rdann(qrs_path, 'qrs')
-            r_peaks = ann.sample
-            print(f"Found {len(r_peaks)} R-peaks in the QRS file")
-            using_qrs = True
-        except Exception as e:
-            print(f"Could not load QRS annotations: {e}")
-            print("Will proceed without QRS annotations")
+    # Always try to load QRS annotations (needed for heart rate calculation)
+    try:
+        print("Attempting to load QRS annotations...")
+        
+        # Check if the .qrs file exists
+        full_qrs_path = qrs_path + '.qrs'
+        if os.path.exists(full_qrs_path):
+            # Try loading as text first (some tools save peaks as a simple list of numbers)
+            try:
+                # Read first few bytes to see if it looks like text
+                with open(full_qrs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(100)
+                    if any(c.isdigit() for c in content) and not any(ord(c) < 32 and c not in '\n\r\t' for c in content[:10]):
+                        print("Detected text-based QRS file. Reading peak indices...")
+                        r_peaks = np.loadtxt(full_qrs_path, dtype=int)
+                        if r_peaks.ndim == 0: # single peak
+                            r_peaks = np.array([r_peaks])
+                        elif r_peaks.ndim == 2: # might have multiple columns, use first
+                            r_peaks = r_peaks[:, 0]
+                        print(f"Loaded {len(r_peaks)} R-peaks from text file")
+                        using_qrs = True
+            except Exception as e:
+                print(f"Could not read as text: {e}")
+            
+            # If not text or loading failed, try binary WFDB format
+            if not using_qrs:
+                try:
+                    print("Reading as WFDB binary annotation...")
+                    ann = wfdb.rdann(qrs_path, 'qrs')
+                    r_peaks = ann.sample
+                    print(f"Found {len(r_peaks)} R-peaks in the QRS file")
+                    using_qrs = True
+                except Exception as e:
+                    print(f"Could not load WFDB binary annotations: {e}")
+        else:
+            print(f"QRS file not found at: {full_qrs_path}")
+            
+    except Exception as e:
+        print(f"Error during QRS load attempt: {e}")
+        print("Will proceed without QRS annotations")
     
-    if using_qrs and len(r_peaks) > 0:
-        print("Extracting segments centered around R-peaks...")
-        segments = extract_segments_around_rpeaks(leads, r_peaks, segment_length)
-    else:
+    # Choose segmentation method
+    if using_sliding_window or not using_qrs or len(r_peaks) == 0:
         print("Extracting segments using sliding window with stride=24 (no overlap)...")
         stride = 24
         segments = extract_segments_sliding_window(leads, segment_length, stride)
+    else:
+        print("Extracting segments centered around R-peaks...")
+        segments = extract_segments_around_rpeaks(leads, r_peaks, segment_length)
+    
+    # Enhancement: Individual Segment Z-Score Normalization
+    if len(segments) > 0:
+        segments = SignalPreprocessor.normalize_zscore(segments)
+        print("Applied Z-Score normalization to each segment for amplitude invariance.")
     
     print(f"Extracted {len(segments)} segments of length {segment_length} from the ECG data")
     
@@ -578,6 +719,78 @@ def determine_lead_configuration(signal_labels):
     return config
 
 
+def load_beat_annotations(base_path, file_name):
+    """Load .atr beat annotations for a MIT-BIH record.
+    
+    Returns:
+        list of (sample_position, class_index) tuples, or empty list if .atr not available.
+    """
+    atr_path = os.path.join(base_path, file_name)
+    
+    # Check if .atr file exists
+    if not os.path.exists(atr_path + '.atr'):
+        return []
+    
+    try:
+        ann = wfdb.rdann(atr_path, 'atr')
+        beats = []
+        for sample, symbol in zip(ann.sample, ann.symbol):
+            if symbol in NON_BEAT_SYMBOLS:
+                continue
+            class_idx = AAMI_SYMBOL_TO_CLASS.get(symbol, None)
+            if class_idx is not None:
+                beats.append((int(sample), class_idx))
+        return beats
+    except Exception as e:
+        print(f"Could not load .atr annotations for {file_name}: {e}")
+        return []
+
+
+def extract_labeled_segments(leads, beat_annotations, segment_length=24, offset=None):
+    """Extract segments centered around annotated beats AND return their labels.
+    
+    Args:
+        leads: list of numpy arrays (one per channel)
+        beat_annotations: list of (sample_position, class_index) tuples
+        segment_length: length of each segment
+        offset: offset from R-peak to start of segment
+    
+    Returns:
+        (segments_array, labels_array) — parallel arrays of segments and their class labels
+    """
+    if offset is None:
+        offset = segment_length // 2
+    
+    num_channels = len(leads)
+    segments = []
+    labels = []
+    
+    min_length = min(len(lead) for lead in leads)
+    
+    for sample_pos, class_idx in beat_annotations:
+        start = sample_pos - offset
+        end = start + segment_length
+        
+        if start < 0 or end > min_length:
+            continue
+        
+        segment = np.zeros((num_channels, segment_length))
+        for i in range(num_channels):
+            segment[i] = leads[i][start:end]
+        
+        segments.append(segment)
+        labels.append(class_idx)
+    
+    if len(segments) == 0:
+        return np.array([]), np.array([])
+    
+    # Enhancement: Signal Pre-processing & Normalization
+    segments = np.array(segments)
+    segments = SignalPreprocessor.normalize_zscore(segments)
+    
+    return segments, np.array(labels)
+
+
 def extract_segments_around_rpeaks(leads, r_peaks, segment_length=24, offset=None):
     if offset is None:
         offset = segment_length // 2
@@ -600,7 +813,12 @@ def extract_segments_around_rpeaks(leads, r_peaks, segment_length=24, offset=Non
         
         segments.append(segment)
     
-    return np.array(segments)
+    # Enhancement: Per-segment normalization
+    if len(segments) > 0:
+        segments = np.array(segments)
+        segments = SignalPreprocessor.normalize_zscore(segments)
+        
+    return segments
 
 
 def extract_segments_sliding_window(leads, segment_length=24, stride=12):
@@ -641,16 +859,20 @@ def calculate_heart_rate(r_peaks, fs):
 
 def classify_heart_rate(bpm):
     categories = {
-        "Over Exercised person": (150, 190),
+        "High Intensity Exercise": (150, 220),
+        "Over Exercised person": (140, 190),
         "Fully Anxiety person": (100, 160),
-        "Fully Depressed person": (50, 70),
         "Normal Healthy Person": (60, 100),
         "High BP person": (80, 120),
-        "Low BP person": (50, 75),
         "Stressed person": (80, 130),
         "Fevered or illness person": (80, 120),
         "Stimulant (drugs) person": (90, 160),
-        "Dehydrated person": (100, 140)
+        "Dehydrated person": (100, 140),
+        "Fully Depressed person": (45, 70),
+        "Low BP person": (40, 75),
+        "Elite Athlete / High Fitness": (35, 55),
+        "Moderate to Severe Bradycardia": (30, 50),
+        "Potential Sinus Node Dysfunction": (30, 45)
     }
     
     matches = []
@@ -661,12 +883,12 @@ def classify_heart_rate(bpm):
     return matches
 
 
-def calculate_class_weights(labels):
+def calculate_class_weights(labels, num_classes=6):
     unique_classes, counts = np.unique(labels, return_counts=True)
     
     total_samples = len(labels)
-    n_classes = len(unique_classes)
-    weights = total_samples / (n_classes * counts)
+    n_present = len(unique_classes)
+    weights = total_samples / (n_present * counts)
     
     print("\nClass distribution:")
     for cls, count, weight in zip(unique_classes, counts, weights):
@@ -675,13 +897,24 @@ def calculate_class_weights(labels):
     if max(counts) / min(counts) > 5:
         print("\nWarning: Dataset is highly imbalanced. Using class weights to compensate.")
     
-    return {int(cls): weight for cls, weight in zip(unique_classes, weights)}
+    # Build a weight dict for all model classes (0 to num_classes-1).
+    # Classes not present in the data get weight 0.0 so the loss ignores them.
+    weight_map = {int(cls): weight for cls, weight in zip(unique_classes, weights)}
+    full_weights = {}
+    for c in range(num_classes):
+        full_weights[c] = weight_map.get(c, 0.0)
+    
+    missing = [c for c in range(num_classes) if c not in weight_map]
+    if missing:
+        print(f"Note: Classes {missing} have no training data. Their weights are set to 0.0.")
+    
+    return full_weights
 
 
 # ------- PART 3: MAIN FUNCTIONALITY -------
 
 def main(base_path, file_names, num_channels=2, segment_length=24, use_sliding_window=False, 
-         batch_size=32, epochs=50, learning_rate=0.001, train_model=True):
+         batch_size=32, epochs=50, learning_rate=0.001, train_model=True, stop_event=None, progress_callback=None):
     print("\n" + "="*70)
     print("ECG ANALYSIS WITH DEEP SPIKING NEURAL NETWORKS")
     print("="*70)
@@ -689,75 +922,133 @@ def main(base_path, file_names, num_channels=2, segment_length=24, use_sliding_w
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    print("\nProcessing multiple ECG datasets...")
-    all_file_info = []
-    for file_name in file_names:
-        file_info = process_single_file(
-            base_path, file_name, use_sliding_window, num_channels, segment_length
-        )
-        if file_info is not None:
+    # ---- Step 1: Separate files into train and test sets (record-level split) ----
+    train_files = []
+    test_files = []
+    for fn in file_names:
+        # Strip UUID prefix if present (e.g. "abc123_100" → "100")
+        base_name = fn.split('_')[-1] if '_' in fn else fn
+        if base_name in TEST_RECORDS:
+            test_files.append(fn)
+        else:
+            train_files.append(fn)
+    
+    print(f"\nRecord-level inter-patient split:")
+    print(f"  Training records: {len(train_files)} files")
+    print(f"  Test records:     {len(test_files)} files")
+    print(f"  Test record IDs:  {TEST_RECORDS}")
+    
+    # ---- Step 2: Load ECG data and extract labeled segments ----
+    def load_labeled_data(file_list, label):
+        """Load ECG files and extract segments with real .atr labels."""
+        all_segments = []
+        all_labels = []
+        all_file_info = []
+        
+        for file_name in file_list:
+            # Process the file (loads signals, QRS, heart rate — same as before)
+            file_info = process_single_file(
+                base_path, file_name, use_sliding_window, num_channels, segment_length
+            )
+            if file_info is None:
+                continue
             all_file_info.append(file_info)
+            
+            # Try to load real .atr annotations for this record
+            beat_annotations = load_beat_annotations(base_path, file_name)
+            
+            if len(beat_annotations) > 0:
+                # Extract segments centered around annotated beats with their real labels
+                leads = file_info['leads']
+                segs, labs = extract_labeled_segments(leads, beat_annotations, segment_length)
+                if len(segs) > 0:
+                    all_segments.append(segs)
+                    all_labels.append(labs)
+                    print(f"  {file_name}: {len(segs)} labeled segments extracted from .atr annotations")
+                else:
+                    print(f"  {file_name}: No valid labeled segments could be extracted")
+            else:
+                # Fallback: use segments from process_single_file with no labels
+                segments = file_info.get('segments', [])
+                if len(segments) > 0:
+                    all_segments.append(np.array(segments))
+                    # Assign class 0 (Normal) as fallback when no .atr available
+                    all_labels.append(np.zeros(len(segments), dtype=int))
+                    print(f"  {file_name}: {len(segments)} segments (no .atr, defaulting to Normal)")
+        
+        if len(all_segments) > 0:
+            return np.concatenate(all_segments), np.concatenate(all_labels), all_file_info
+        return np.array([]), np.array([]), all_file_info
     
-    print(f"\nSuccessfully processed {len(all_file_info)} out of {len(file_names)} files")
+    print(f"\nLoading training data ({len(train_files)} records)...")
+    train_segments, train_labels, train_file_info = load_labeled_data(train_files, "train")
     
-    if len(all_file_info) == 0:
-        print("No valid files to process. Exiting.")
+    print(f"\nLoading test data ({len(test_files)} records)...")
+    test_segments, test_labels, test_file_info = load_labeled_data(test_files, "test")
+    
+    all_file_info = train_file_info + test_file_info
+    
+    if len(train_segments) == 0:
+        print("No training segments extracted. Exiting.")
         return
     
-    all_segments = []
-    file_indices = []
+    print(f"\n" + "="*50)
+    print(f"DATA SUMMARY")
+    print(f"="*50)
+    print(f"Total training segments: {len(train_segments)}")
+    print(f"Total test segments:     {len(test_segments)}")
+    if len(train_segments) > 0:
+        print(f"Segment shape:           {train_segments[0].shape}")
     
-    for idx, file_info in enumerate(all_file_info):
-        segments = file_info['segments']
-        if len(segments) > 0:
-            all_segments.extend(segments)
-            file_indices.extend([idx] * len(segments))
+    # Print class distribution for training data
+    print(f"\nTraining class distribution:")
+    unique_classes, counts = np.unique(train_labels, return_counts=True)
+    for cls, count in zip(unique_classes, counts):
+        name = AAMI_CLASS_NAMES.get(cls, f"Class {cls}")
+        print(f"  {name} (class {cls}): {count} segments ({count/len(train_labels)*100:.1f}%)")
     
-    all_segments = np.array(all_segments)
+    if len(test_segments) > 0:
+        print(f"\nTest class distribution:")
+        unique_test, test_counts = np.unique(test_labels, return_counts=True)
+        for cls, count in zip(unique_test, test_counts):
+            name = AAMI_CLASS_NAMES.get(cls, f"Class {cls}")
+            print(f"  {name} (class {cls}): {count} segments ({count/len(test_labels)*100:.1f}%)")
     
-    if len(all_segments) == 0:
-        print("No segments extracted from the files. Exiting.")
-        return
-    
-    print(f"\nTotal segments collected: {len(all_segments)}")
-    print(f"Segment shape: {all_segments.shape}")
-    
+    # ---- Step 3: Split training data into train/validation (segment-level) ----
     np.random.seed(42)
     
-    class_probs = np.array([0.5, 0.2, 0.1, 0.1, 0.05, 0.05])
-    all_labels = np.random.choice(
-        np.arange(len(class_probs)), 
-        size=len(all_segments), 
-        p=class_probs
-    )
+    class_weights = calculate_class_weights(train_labels)
     
-    print("\nSynthetic labels created. In a real scenario, use actual labels from your dataset.")
-    
-    class_weights = calculate_class_weights(all_labels)
-    
-    X_train_val, X_test, y_train_val, y_test = train_test_split(
-        all_segments, all_labels, test_size=0.2, random_state=42, stratify=all_labels
-    )
-    
+    # Split training data into train (80%) and validation (20%)
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train_val, y_train_val, test_size=0.25, random_state=42, stratify=y_train_val
+        train_segments, train_labels, test_size=0.2, random_state=42, stratify=train_labels
     )
     
-    print(f"\nTraining set: {len(X_train)} segments")
-    print(f"Validation set: {len(X_val)} segments")
-    print(f"Test set: {len(X_test)} segments")
+    X_test = test_segments
+    y_test = test_labels
+    
+    print(f"\nFinal split sizes:")
+    print(f"  Training set:   {len(X_train)} segments")
+    print(f"  Validation set: {len(X_val)} segments")
+    print(f"  Test set:       {len(X_test)} segments")
     
     train_dataset = ECGDataset(X_train, y_train)
     val_dataset = ECGDataset(X_val, y_val)
-    test_dataset = ECGDataset(X_test, y_test)
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
     
+    # Only create test loader if we have test data
+    test_loader = None
+    if len(X_test) > 0:
+        test_dataset = ECGDataset(X_test, y_test)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    
+    # ---- Step 4: Initialize and train model ----
     print("\nInitializing the DSNN model...")
     
-    model = DSNN(input_channels=num_channels, sequence_length=segment_length, num_classes=6)
+    num_classes = 6  # Keep 6 classes for compatibility (class 5 may just have no training data)
+    model = DSNN(input_channels=num_channels, sequence_length=segment_length, num_classes=num_classes)
     dsnn_system = DSNNSystem(model, device)
     
     print(f"\nModel architecture:")
@@ -771,8 +1062,15 @@ def main(base_path, file_names, num_channels=2, segment_length=24, use_sliding_w
             val_loader=val_loader,
             epochs=epochs,
             lr=learning_rate,
-            class_weights=list(class_weights.values()) if class_weights else None
+            class_weights=list(class_weights.values()) if class_weights else None,
+            stop_event=stop_event,
+            progress_callback=progress_callback
         )
+        
+        # If training was stopped, do not proceed with evaluation
+        if stop_event is not None and stop_event.is_set():
+            print("\nTraining was stopped. Skipping evaluation.")
+            return None
     else:
         print("\nSkipping training phase. Attempting to load pre-trained model...")
         try:
@@ -783,8 +1081,15 @@ def main(base_path, file_names, num_channels=2, segment_length=24, use_sliding_w
             print("Could not load pre-trained model. Please train the model first or check file path.")
             return
     
-    print("\nEvaluating model on test set...")
-    metrics_dict, predictions, true_labels = dsnn_system.evaluate_model(test_loader)
+    # ---- Step 5: Evaluate on test set ----
+    if test_loader is not None:
+        print("\nEvaluating model on test set (unseen records)...")
+        metrics_dict, predictions, true_labels = dsnn_system.evaluate_model(test_loader)
+    else:
+        print("\nNo test records available for evaluation. Skipping evaluation.")
+        metrics_dict = {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0}
+        predictions = np.array([])
+        true_labels = np.array([])
     
     results = {
         'system': dsnn_system,

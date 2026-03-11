@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { 
-  ArrowLeft, 
-  Download, 
-  Activity, 
+import { useParams, Link, useLocation } from 'react-router-dom';
+import {
+  ArrowLeft,
+  Download,
+  Activity,
   Heart,
   AlertTriangle,
   CheckCircle,
@@ -20,6 +20,7 @@ import { jsPDF } from 'jspdf';
 
 const Results = () => {
   const { id } = useParams();
+  const location = useLocation();
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -33,11 +34,21 @@ const Results = () => {
     try {
       setLoading(true);
       setError(null);
+
+      // If result was handed through React Router state (because autoSave is disabled),
+      // we already have it in memory! Read it straight from the pass-through.
+      if (location.state && location.state.resultData) {
+        setResult(location.state.resultData);
+        setLoading(false);
+        return;
+      }
+
       const data = await getResult(id);
       setResult(data);
     } catch (err) {
       console.error('Error fetching result:', err);
-      setError('Could not load results. The analysis may not exist or the server may be unavailable.');
+      // Give a highly detailed error indicating whether it was not found
+      setError('Could not load results. If "Auto-save Results" is disabled, reloading this page will lose your results. Please re-run the analysis.');
       setResult(null);
     } finally {
       setLoading(false);
@@ -47,9 +58,9 @@ const Results = () => {
   // PDF Export Function - Full Single Page with Disclaimer at Footer
   const exportToPDF = async () => {
     if (!result) return;
-    
+
     setExporting(true);
-    
+
     try {
       const doc = new jsPDF();
       const pageWidth = doc.internal.pageSize.getWidth();
@@ -60,7 +71,7 @@ const Results = () => {
       // Header
       doc.setFillColor(102, 126, 234);
       doc.rect(0, 0, pageWidth, 28, 'F');
-      
+
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(18);
       doc.setFont('helvetica', 'bold');
@@ -77,10 +88,10 @@ const Results = () => {
       doc.setFont('helvetica', 'bold');
       doc.text('PATIENT INFORMATION', margin, yPos);
       yPos += 8;
-      
+
       doc.setDrawColor(200, 200, 200);
       doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
-      
+
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(11);
       const patientName = result.patient_name || 'Anonymous';
@@ -90,15 +101,15 @@ const Results = () => {
       const createdAt = new Date(result.created_at);
       const displayOffset = 0;
       const displayDate = new Date(createdAt.getTime() + displayOffset);
-      const analysisDate = displayDate.toLocaleDateString('en-US', { 
+      const analysisDate = displayDate.toLocaleDateString('en-US', {
         year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
       }) + ' IST';
-      
-      doc.text(`Patient Name: ${patientName}`, margin, yPos);
-      doc.text(`Age: ${patientAge} years`, margin + 90, yPos);
+
+      doc.text(`Patient Name: ${patientName}`, margin, yPos + 3);
+      doc.text(`Age: ${patientAge} years`, margin + 90, yPos + 3);
       yPos += 8;
-      doc.text(`Analysis Date: ${analysisDate}`, margin, yPos);
-      doc.text(`File Name: ${fileName}`, margin + 90, yPos);
+      doc.text(`Analysis Date: ${analysisDate}`, margin, yPos + 1);
+      doc.text(`File Name: ${fileName}`, margin + 90, yPos + 1);
       yPos += 12;
 
       // Diagnosis Result Section
@@ -106,10 +117,10 @@ const Results = () => {
       doc.setFont('helvetica', 'bold');
       doc.text('DIAGNOSIS RESULT', margin, yPos);
       yPos += 8;
-      
+
       doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
       yPos += 3;
-      
+
       const isNormal = result.result?.is_normal;
       if (isNormal) {
         doc.setFillColor(16, 185, 129);
@@ -117,18 +128,18 @@ const Results = () => {
         doc.setFillColor(239, 68, 68);
       }
       doc.roundedRect(margin, yPos, pageWidth - 2 * margin, 24, 2, 2, 'F');
-      
+
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(15);
       doc.setFont('helvetica', 'bold');
       doc.text(result.result?.primary_diagnosis || 'Unknown', margin + 5, yPos + 10);
       doc.setFontSize(11);
       doc.text(`Confidence: ${result.result?.confidence || 0}%`, margin + 5, yPos + 19);
-      
+
       doc.setFont('helvetica', 'normal');
       const segmentsText = `Segments Analyzed: ${result.result?.segments_analyzed || 0}`;
       doc.text(segmentsText, pageWidth - margin - doc.getTextWidth(segmentsText) - 5, yPos + 19);
-      
+
       yPos += 32;
 
       // ECG Metrics Section - Full Details
@@ -137,20 +148,21 @@ const Results = () => {
       doc.setFont('helvetica', 'bold');
       doc.text('ECG METRICS & MEASUREMENTS', margin, yPos);
       yPos += 8;
-      
+
       doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
       yPos += 5;
-      
+
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      
+
       // Create a table-like structure for metrics with even spacing
       const metricsData = [
         ['Heart Rate', `${result.ecg_metrics?.heart_rate || 'N/A'} BPM`, 'RR Interval', `${result.ecg_metrics?.rr_interval || 'N/A'} ms`],
         ['HRV (Heart Rate Variability)', `${result.ecg_metrics?.hrv || 'N/A'} ms`, 'P Wave Duration', `${result.ecg_metrics?.p_wave?.toFixed(3) || 'N/A'} s`],
-        ['QRS Complex', `${result.ecg_metrics?.qrs_complex?.toFixed(3) || 'N/A'} s`, 'QT Interval', `${result.ecg_metrics?.qt_interval?.toFixed(3) || 'N/A'} s`]
+        ['QRS Complex', `${result.ecg_metrics?.qrs_complex?.toFixed(3) || 'N/A'} s`, 'QT Interval', `${result.ecg_metrics?.qt_interval?.toFixed(3) || 'N/A'} s`],
+        ['R-Peaks Found', `${result.ecg_metrics?.r_peaks || 0}`, 'Segments Assessed', `${result.result?.segments_analyzed || 0}`]
       ];
-      
+
       metricsData.forEach(row => {
         doc.text(`${row[0]}:`, margin, yPos);
         doc.setFont('helvetica', 'bold');
@@ -162,45 +174,42 @@ const Results = () => {
         doc.setFont('helvetica', 'normal');
         yPos += 8;
       });
-      
+
       yPos += 8;
 
-      // Prediction Distribution Section
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('PREDICTION DISTRIBUTION', margin, yPos);
-      yPos += 8;
-      
-      doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
-      yPos += 5;
-      
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      
-      if (result.result?.predictions) {
-        Object.entries(result.result.predictions).forEach(([className, percentage]) => {
-          doc.text(`- ${className}:`, margin, yPos);
-          doc.setFont('helvetica', 'bold');
-          doc.text(`${percentage}%`, margin + 65, yPos);
-          doc.setFont('helvetica', 'normal');
+      // Heart Rate Insights Section
+      if (result.ecg_metrics?.hr_categories && result.ecg_metrics.hr_categories.length > 0) {
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('HEART RATE INSIGHTS', margin, yPos);
+        yPos += 8;
+
+        doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
+        yPos += 5;
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+
+        result.ecg_metrics.hr_categories.forEach((category) => {
+          doc.text(`> ${category}`, margin, yPos);
           yPos += 7;
         });
+
+        yPos += 8;
       }
-      
-      yPos += 8;
 
       // Recommendations Section
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
       doc.text('RECOMMENDATIONS', margin, yPos);
       yPos += 8;
-      
+
       doc.line(margin, yPos - 3, pageWidth - margin, yPos - 3);
       yPos += 5;
-      
+
       doc.setFontSize(10);
       doc.setFont('helvetica', 'normal');
-      
+
       (result.recommendations || []).forEach((rec, index) => {
         doc.text(`${index + 1}. ${rec}`, margin, yPos);
         yPos += 7;
@@ -208,17 +217,17 @@ const Results = () => {
 
       // Calculate footer position - place disclaimer at bottom
       const footerY = pageHeight - 30;
-      
+
       // Disclaimer Box at Footer
       doc.setFillColor(255, 250, 240);
       doc.setDrawColor(255, 200, 100);
       doc.roundedRect(margin, footerY, pageWidth - 2 * margin, 20, 2, 2, 'FD');
-      
+
       doc.setTextColor(180, 100, 0);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
       doc.text('WARNING', margin + 3, footerY + 6);
-      
+
       doc.setFont('helvetica', 'italic');
       doc.setFontSize(9);
       doc.setTextColor(80, 80, 80);
@@ -233,7 +242,7 @@ const Results = () => {
       const cleanFileName = fileName.replace(/\.[^/.]+$/, '');
       const newFileName = `AD_Report_${patientName.replace(/\s+/g, '_')}_${patientAge}_${cleanFileName}_${timestamp}.pdf`;
       doc.save(newFileName);
-      
+
     } catch (err) {
       console.error('Error generating PDF:', err);
       alert('Failed to generate PDF. Please try again.');
@@ -250,11 +259,11 @@ const Results = () => {
     return <span className="result-badge badge-danger"><AlertTriangle size={14} /> Abnormal</span>;
   };
 
-  const pieData = result && result.result && result.result.predictions 
+  const pieData = result && result.result && result.result.predictions
     ? Object.entries(result.result.predictions).map(([name, value]) => ({
-        name,
-        value
-      }))
+      name,
+      value
+    }))
     : [];
 
   const COLORS = ['#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#ec4899', '#64748b'];
@@ -326,8 +335,8 @@ const Results = () => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button 
-            className="btn btn-secondary" 
+          <button
+            className="btn btn-secondary"
             onClick={exportToPDF}
             disabled={exporting}
           >
@@ -341,10 +350,10 @@ const Results = () => {
       <div className="card" style={{ marginBottom: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ 
-              width: '64px', 
-              height: '64px', 
-              borderRadius: '50%', 
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
               background: result.result?.is_normal ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
               display: 'flex',
               alignItems: 'center',
@@ -370,11 +379,11 @@ const Results = () => {
         </div>
 
         {/* Patient Info Banner */}
-        <div style={{ 
-          display: 'flex', 
-          gap: '24px', 
-          padding: '12px 16px', 
-          background: 'var(--background-secondary)', 
+        <div style={{
+          display: 'flex',
+          gap: '24px',
+          padding: '12px 16px',
+          background: 'var(--background-secondary)',
           borderRadius: '8px',
           marginBottom: '16px'
         }}>
@@ -414,6 +423,15 @@ const Results = () => {
             <div className="stat-content">
               <div className="stat-label">HRV</div>
               <div className="stat-value">{result.ecg_metrics?.hrv || 'N/A'} <span style={{ fontSize: '16px' }}>ms</span></div>
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-icon red">
+              <Activity size={20} />
+            </div>
+            <div className="stat-content">
+              <div className="stat-label">R-Peaks</div>
+              <div className="stat-value">{result.ecg_metrics?.r_peaks || 0}</div>
             </div>
           </div>
           <div className="stat-card">
@@ -461,9 +479,9 @@ const Results = () => {
               </div>
               <div style={{ marginTop: '16px' }}>
                 {pieData.map((item, index) => (
-                  <div key={index} style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                  <div key={index} style={{
+                    display: 'flex',
+                    alignItems: 'center',
                     justifyContent: 'space-between',
                     padding: '8px 0',
                     borderBottom: '1px solid var(--border-color)'
@@ -499,9 +517,9 @@ const Results = () => {
               { label: 'QT Interval', value: result.ecg_metrics?.qt_interval, unit: 's' },
               { label: 'RR Interval', value: result.ecg_metrics?.rr_interval ? result.ecg_metrics.rr_interval / 1000 : null, unit: 's' },
             ].map((metric, index) => (
-              <div key={index} style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
+              <div key={index} style={{
+                display: 'flex',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 padding: '12px',
                 background: 'var(--background-secondary)',
@@ -517,6 +535,34 @@ const Results = () => {
         </div>
       </div>
 
+      {/* Heart Rate Category Insights */}
+      {result.ecg_metrics?.hr_categories && result.ecg_metrics.hr_categories.length > 0 && (
+        <div className="card" style={{ marginBottom: '24px' }}>
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">Heart Rate Insights</h3>
+              <p className="card-subtitle">Possible categories based on heart rate calculations</p>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {result.ecg_metrics.hr_categories.map((category, index) => (
+              <div key={index} style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '12px',
+                background: 'var(--background-secondary)',
+                borderRadius: '8px',
+                borderLeft: '3px solid var(--warning-color, #f59e0b)'
+              }}>
+                <Heart size={18} style={{ color: 'var(--warning-color, #f59e0b)' }} />
+                <span>{category}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Recommendations */}
       <div className="card">
         <div className="card-header">
@@ -527,9 +573,9 @@ const Results = () => {
         </div>
         <div style={{ display: 'grid', gap: '12px' }}>
           {(result.recommendations || []).map((rec, index) => (
-            <div key={index} style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
+            <div key={index} style={{
+              display: 'flex',
+              alignItems: 'center',
               gap: '12px',
               padding: '12px',
               background: 'var(--background-secondary)',

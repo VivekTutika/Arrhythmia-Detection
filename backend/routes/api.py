@@ -9,6 +9,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 import numpy as np
+import threading
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -17,6 +18,11 @@ api_bp = Blueprint('api', __name__)
 
 # Storage file path
 STORAGE_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'results.json')
+
+# Persistent training results file — survives server restarts
+TRAINING_RESULTS_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'training_results.json')
+# Backup for transactional updates (restore on stop/failure)
+TRAINING_BACKUP_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'training_results.bak')
 
 # Training status tracking (global variable)
 TRAINING_STATUS = {
@@ -30,8 +36,87 @@ TRAINING_STATUS = {
     'current_epoch': 0,
     'image_files': [],
     'training_thread': None,
-    'training_process': None
+    'training_process': None,
+    'metrics': {
+        'history': [],          # per-epoch: {epoch, train_loss, train_acc, val_loss, val_acc}
+        'evaluation': None      # final: {accuracy, precision, recall, f1, report}
+    }
 }
+
+# Threading event to signal training to stop
+TRAINING_STOP_EVENT = threading.Event()
+
+
+def backup_training_results():
+    """Create a backup of current training results before starting a new run."""
+    try:
+        if os.path.exists(TRAINING_RESULTS_FILE):
+            import shutil
+            shutil.copy2(TRAINING_RESULTS_FILE, TRAINING_BACKUP_FILE)
+            logger.info("Created backup of previous training results.")
+    except Exception as e:
+        logger.error(f"Failed to create training results backup: {e}")
+
+
+def rollback_training_results():
+    """Restore results from backup if a training run fails or is stopped."""
+    global TRAINING_STATUS
+    try:
+        if os.path.exists(TRAINING_BACKUP_FILE):
+            import shutil
+            shutil.copy2(TRAINING_BACKUP_FILE, TRAINING_RESULTS_FILE)
+            # Reload memory state from backup file
+            import json
+            with open(TRAINING_RESULTS_FILE, 'r') as f:
+                saved = json.load(f)
+                TRAINING_STATUS['status'] = saved.get('status', 'not_started')
+                TRAINING_STATUS['progress'] = saved.get('progress', 0)
+                TRAINING_STATUS['message'] = saved.get('message', '')
+                TRAINING_STATUS['error'] = saved.get('error')
+                TRAINING_STATUS['start_time'] = saved.get('start_time')
+                TRAINING_STATUS['end_time'] = saved.get('end_time')
+                TRAINING_STATUS['epochs'] = saved.get('epochs', 0)
+                TRAINING_STATUS['current_epoch'] = saved.get('current_epoch', 0)
+                TRAINING_STATUS['metrics'] = saved.get('metrics', {'history': [], 'evaluation': None})
+            
+            os.remove(TRAINING_BACKUP_FILE)
+            logger.info("Rolled back to previous successful training results.")
+            return True
+    except Exception as e:
+        logger.error(f"Failed to rollback training results: {e}")
+    return False
+
+
+def save_training_results():
+    """Persist the current TRAINING_STATUS to a JSON file for use after restarts."""
+    try:
+        data = {
+            'status': TRAINING_STATUS['status'],
+            'progress': TRAINING_STATUS['progress'],
+            'message': TRAINING_STATUS['message'],
+            'error': TRAINING_STATUS['error'],
+            'start_time': TRAINING_STATUS['start_time'],
+            'end_time': TRAINING_STATUS['end_time'],
+            'epochs': TRAINING_STATUS['epochs'],
+            'current_epoch': TRAINING_STATUS['current_epoch'],
+            'metrics': TRAINING_STATUS['metrics'],
+        }
+        os.makedirs(os.path.dirname(TRAINING_RESULTS_FILE), exist_ok=True)
+        with open(TRAINING_RESULTS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save training results: {e}")
+
+
+def load_training_results():
+    """Load the last persisted training results from disk."""
+    try:
+        if os.path.exists(TRAINING_RESULTS_FILE):
+            with open(TRAINING_RESULTS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load training results: {e}")
+    return None
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {'edf', 'qrs', 'dat'}
@@ -59,11 +144,14 @@ def save_results(results):
     except Exception as e:
         logger.error(f"Error saving results: {e}")
 
-def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
+def process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings=None):
     """
     Process ECG file using DSNN model
     Integrates with the actual DSNN model from dsnn_example.py
     """
+    if settings is None:
+        settings = {}
+        
     logger.info(f"Processing ECG file: {filename}")
     
     try:
@@ -79,14 +167,14 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         )
         import torch
         
-        # Get the base path for EDF files
-        base_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Dataset', 'edf')
+        # Identify uploaded file path location instead of Dataset fallback
+        base_path = os.path.dirname(filepath)
         
         # Extract file name without extension
-        file_name = os.path.splitext(filename)[0]
+        file_name = os.path.splitext(os.path.basename(filepath))[0]
         
-        # Process the file
-        file_info = process_single_file(base_path, file_name, using_sliding_window=True)
+        # Process the file - Shift to Peak-Triggered Inference
+        file_info = process_single_file(base_path, file_name, using_sliding_window=False)
         
         if file_info is None or len(file_info.get('segments', [])) == 0:
             # Fallback if file processing fails
@@ -101,56 +189,40 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         model.to(device)
         
         # Try to load trained model weights if available
-        # Priority: 1) best_acc_model.pth (recommended), 2) best_loss_model.pth, 3) dsnn_model.pth (legacy)
         models_dir = os.path.dirname(os.path.dirname(__file__))
-        model_path = os.path.join(models_dir, 'models', 'best_acc_model.pth')
+        
+        # Apply custom model path if specified in settings
+        custom_model = settings.get('modelPath', '')
+        model_paths = []
+        if custom_model:
+            if custom_model.startswith('./models/'):
+                model_paths.append(os.path.join(models_dir, 'models', custom_model.replace('./models/', '')))
+            else:
+                model_paths.append(custom_model)
+                
+        # Fallback priority
+        model_paths.extend([
+            os.path.join(models_dir, 'models', 'best_acc_model.pth'),
+            os.path.join(models_dir, 'models', 'best_loss_model.pth'),
+            os.path.join(models_dir, 'models', 'dsnn_model.pth')
+        ])
         
         model_loaded = False
-        if os.path.exists(model_path):
-            try:
-                checkpoint = torch.load(model_path, map_location=device)
-                # Check if it's a checkpoint dict or state_dict
-                if 'model_state_dict' in checkpoint:
-                    model.load_state_dict(checkpoint['model_state_dict'])
-                    logger.info(f"✓ Using best_acc_model.pth - Loaded trained model weights from epoch {checkpoint.get('epoch', 'unknown')}")
-                else:
-                    model.load_state_dict(checkpoint)
-                    logger.info("✓ Using best_acc_model.pth - Loaded trained model weights")
-                model_loaded = True
-            except Exception as e:
-                logger.warning(f"Could not load best_acc_model.pth: {e}")
-        
-        # Fallback to best_loss_model.pth if best_acc_model.pth not available
-        if not model_loaded:
-            model_path = os.path.join(models_dir, 'models', 'best_loss_model.pth')
+        for model_path in model_paths:
             if os.path.exists(model_path):
                 try:
                     checkpoint = torch.load(model_path, map_location=device)
+                    # Check if it's a checkpoint dict or state_dict
                     if 'model_state_dict' in checkpoint:
                         model.load_state_dict(checkpoint['model_state_dict'])
-                        logger.info(f"✓ Using best_loss_model.pth - Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
+                        logger.info(f"✓ Using {os.path.basename(model_path)} - Loaded trained model weights from epoch {checkpoint.get('epoch', 'unknown')}")
                     else:
                         model.load_state_dict(checkpoint)
-                        logger.info("✓ Using best_loss_model.pth - Loaded model weights")
+                        logger.info(f"✓ Using {os.path.basename(model_path)} - Loaded trained model weights")
                     model_loaded = True
+                    break
                 except Exception as e:
-                    logger.warning(f"Could not load best_loss_model.pth: {e}")
-        
-        # Fallback to legacy dsnn_model.pth if neither is available
-        if not model_loaded:
-            model_path = os.path.join(models_dir, 'models', 'dsnn_model.pth')
-            if os.path.exists(model_path):
-                try:
-                    checkpoint = torch.load(model_path, map_location=device)
-                    if 'model_state_dict' in checkpoint:
-                        model.load_state_dict(checkpoint['model_state_dict'])
-                        logger.info(f"⚠ Using legacy dsnn_model.pth - Loaded model")
-                    else:
-                        model.load_state_dict(checkpoint)
-                        logger.info("⚠ Using legacy dsnn_model.pth - Loaded model weights")
-                    model_loaded = True
-                except Exception as e:
-                    logger.warning(f"Could not load dsnn_model.pth: {e}")
+                    logger.warning(f"Could not load {model_path}: {e}")
         
         if not model_loaded:
             logger.warning("⚠ No trained model found! Using randomly initialized model for inference.")
@@ -163,7 +235,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         
         # Run predictions in batches
         predictions = []
-        batch_size = 32
+        batch_size = int(settings.get('batchSize', 32))
         
         with torch.no_grad():
             for i in range(0, len(X), batch_size):
@@ -195,10 +267,16 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         for cls, count in zip(unique_classes, counts):
             predictions_dict[class_names[cls]] = int(count / len(predictions) * 100)
         
-        # Determine primary diagnosis
-        primary_diagnosis = class_names[unique_classes[np.argmax(counts)]]
+        # Determine primary diagnosis based on confidence threshold
         confidence = float(np.max(counts) / len(predictions) * 100)
-        is_normal = primary_diagnosis == "Normal Sinus Rhythm"
+        conf_thresh = int(settings.get('confidenceThreshold', 80))
+        
+        if confidence < conf_thresh:
+            primary_diagnosis = "Inconclusive (Low Confidence)"
+            is_normal = False
+        else:
+            primary_diagnosis = class_names[unique_classes[np.argmax(counts)]]
+            is_normal = primary_diagnosis == "Normal Sinus Rhythm"
         
         # Get heart rate if available
         heart_rate = file_info.get('heart_rate', None)
@@ -226,9 +304,11 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
                 'hrv': np.random.randint(20, 80),
                 'p_wave': round(np.random.uniform(0.08, 0.16), 3),
                 'qrs_complex': round(np.random.uniform(0.06, 0.12), 3),
-                'qt_interval': round(np.random.uniform(0.32, 0.44), 3)
+                'qt_interval': round(np.random.uniform(0.32, 0.44), 3),
+                'hr_categories': file_info.get('hr_categories', []),
+                'r_peaks': len(file_info.get('r_peaks', [])) if hasattr(file_info.get('r_peaks'), '__len__') else 0
             },
-            'recommendations': generate_recommendations(primary_diagnosis, is_normal)
+            'recommendations': generate_recommendations(primary_diagnosis, is_normal, heart_rate)
         }
         
         return result
@@ -238,12 +318,12 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id):
         # If DSNN fails, raise to trigger fallback
         raise
 
-def process_ecg_file(filepath, result_id, filename, patient_id):
+def process_ecg_file(filepath, result_id, filename, patient_id, settings=None):
     """
     Process ECG file - tries DSNN first, then falls back to simulation
     """
     try:
-        return process_ecg_with_dsnn(filepath, result_id, filename, patient_id)
+        return process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings)
     except Exception as e:
         logger.warning(f"DSNN processing failed: {e}. Using simulation mode.")
         
@@ -303,43 +383,73 @@ def process_ecg_file(filepath, result_id, filename, patient_id):
         
         return result
 
-def generate_recommendations(diagnosis, is_normal):
-    """Generate recommendations based on diagnosis"""
+def generate_recommendations(diagnosis, is_normal, heart_rate=None):
+    """Generate detailed, clinically relevant recommendations based on the primary diagnosis and heart rate"""
+    
+    # Base recommendations list
+    recs = []
+    
+    # Check for Heart Rate specific warnings first
+    if heart_rate:
+        if heart_rate < 50:
+            recs.append(f"Urgent: Significant Bradycardia detected ({int(heart_rate)} BPM). Seek medical advice if you experience dizziness or fainting.")
+        elif heart_rate > 120:
+            recs.append(f"Urgent: Significant Tachycardia detected ({int(heart_rate)} BPM). Monitor for heart palpitations or shortness of breath.")
+
     if is_normal:
-        return [
-            'Continue regular cardiac checkups',
-            'Maintain healthy lifestyle',
-            'No immediate medical intervention required'
+        recs.extend([
+            "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+            "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+            "Monitor periodically; no immediate medical intervention is required for this recording."
+        ])
+        return recs
+
+    diagnosis_recs = {
+        'Atrial Fibrillation': [
+            "Urgent: Consult a cardiologist promptly for a comprehensive clinical evaluation.",
+            "Consider evaluation for anticoagulation (blood thinner) therapy to reduce stroke risk.",
+            "Discuss rate or rhythm control medications (e.g., beta-blockers, antiarrhythmics) with your physician.",
+            "Avoid stimulants like excessive caffeine, smoking, or alcohol which can act as physiological triggers.",
+            "Monitor closely for symptoms such as sudden shortness of breath, severe palpitations, or chest pain."
+        ],
+        'Ventricular Arrhythmia': [
+            "Critical: Seek immediate emergency medical attention or a rapid cardiology consultation.",
+            "Strictly avoid strenuous physical activities or high-intensity exercise until formally cleared.",
+            "Discuss the potential need for continuous Holter monitoring or an implantable cardioverter-defibrillator (ICD).",
+            "Ensure any prescribed antiarrhythmic medications are taken exactly as directed.",
+            "Evaluate for any underlying structural heart disease or electrolyte imbalances with your healthcare provider."
+        ],
+        'Conduction Block': [
+            "Schedule a prompt consultation with a cardiac electrophysiologist or cardiologist.",
+            "Discuss the potential indication for a pacemaker depending on the degree/severity of the block.",
+            "Review all current medications with a doctor, as certain drugs can inadvertently slow conduction.",
+            "Monitor strictly for episodes of unexpected dizziness, presyncope (lightheadedness), or fainting.",
+            "Keep follow-up appointments for routine serial ECG monitoring to track block progression."
+        ],
+        'Premature Contraction': [
+            "Significantly reduce intake of known triggers such as heavy caffeine, tobacco, and high-sugar energy drinks.",
+            "Implement stress management techniques and ensure adequate rest cycles/sleep hygiene.",
+            "Maintain proper hydration and ensure electrolyte stability (especially potassium and magnesium).",
+            "Follow up with a cardiologist if the episodes become highly frequent or cause noticeable discomfort.",
+            "Consider a short-term ambulatory ECG patch to quantify the baseline burden of the extra beats."
+        ],
+        'ST Segment Abnormality': [
+            "Urgent: Seek immediate medical evaluation at an emergency department or urgent cardiology clinic.",
+            "Consider a formal treadmill stress test or cardiac imaging to evaluate for coronary ischemia.",
+            "Pay hyper-vigilant attention to any onset of chest pain, jaw pain, or radiating arm discomfort.",
+            "Review cardiovascular risk factors (hypertension, hyperlipidemia, diabetes) comprehensively with your primary care provider.",
+            "Do not perform vigorous physical exertion until cleared by an attending cardiovascular specialist."
+        ],
+        'Inconclusive (Low Confidence)': [
+            "The neural network could not determine a definitive classification pattern. A manual review is required.",
+            "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+            "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+            "Avoid making clinical decisions purely based on this low-confidence inference."
         ]
-    else:
-        recommendations = {
-            'Atrial Fibrillation': [
-                'Consult a cardiologist promptly',
-                'Consider anticoagulation therapy',
-                'Monitor heart rate regularly'
-            ],
-            'Ventricular Arrhythmia': [
-                'Seek immediate medical attention',
-                'Avoid strenuous activities',
-                'Consider wearable cardiac monitor'
-            ],
-            'Conduction Block': [
-                'Consult a cardiologist',
-                'Consider pacemaker evaluation',
-                'Regular monitoring required'
-            ],
-            'Premature Contraction': [
-                'Reduce caffeine and alcohol intake',
-                'Manage stress levels',
-                'Follow up with cardiologist if frequent'
-            ],
-            'ST Segment Abnormality': [
-                'Seek immediate medical evaluation',
-                'Consider stress test',
-                'Monitor for chest pain'
-            ]
-        }
-        return recommendations.get(diagnosis, ['Consult a healthcare professional'])
+    }
+    
+    recs.extend(diagnosis_recs.get(diagnosis, ['Consult a healthcare professional for a formal evaluation of these abnormalities.']))
+    return recs
 
 @api_bp.route('/dashboard', methods=['GET'])
 def get_dashboard():
@@ -418,6 +528,7 @@ def analyze_ecg():
             return jsonify({'error': 'No file provided'}), 400
         
         file = request.files['file']
+        qrs_file = request.files.get('qrs_file', None)
         
         # Get patient information from form data
         patient_info_str = request.form.get('patient_info', None)
@@ -434,30 +545,50 @@ def analyze_ecg():
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
         
+        # Parse settings
+        settings_str = request.form.get('settings', None)
+        settings = {}
+        if settings_str:
+            try:
+                settings = json.loads(settings_str)
+            except:
+                pass
+                
         if file and allowed_file(file.filename):
             result_id = str(uuid.uuid4())
             filename = secure_filename(file.filename)
             
-            # Save file
+            # Save main file
             filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{result_id}_{filename}")
             file.save(filepath)
             
+            # Save auxiliary QRS file side-by-side if provided
+            if qrs_file and allowed_file(qrs_file.filename):
+                # Ensure it carries the exact UUID prefix matching the .edf file
+                base_name = os.path.splitext(filename)[0]
+                qrs_filename = f"{result_id}_{base_name}{os.path.splitext(qrs_file.filename)[1]}"
+                qrs_filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], qrs_filename)
+                qrs_file.save(qrs_filepath)
+                logger.info(f"Saved paired annotations file: {qrs_filename}")
+            
             # Process the file
-            result = process_ecg_file(filepath, result_id, filename, patient_id)
+            result = process_ecg_file(filepath, result_id, filename, patient_id, settings)
             
             # Add patient info to result
             result['patient_name'] = patient_info.get('name', 'Anonymous')
             result['patient_age'] = patient_info.get('age', 'N/A')
             
             # Save to storage
-            results = load_results()
-            results.append(result)
-            save_results(results)
+            if settings.get('autoSave', True):
+                results = load_results()
+                results.append(result)
+                save_results(results)
             
             return jsonify({
                 'id': result['id'],
                 'message': 'Analysis completed successfully',
-                'status': 'completed'
+                'status': 'completed',
+                'result_data': result
             })
         else:
             return jsonify({'error': 'Invalid file type. Allowed: edf, qrs, dat'}), 400
@@ -596,13 +727,10 @@ def train_model():
     
     try:
         import sys
-        import threading
-        import time
-        from io import StringIO
         
         # Get parameters from request
         data = request.get_json() or {}
-        dataset_path = data.get('dataset_path', 'Dataset/edf')
+        dataset_path = data.get('dataset_path', 'Dataset/MIT-BIH')
         epochs = int(data.get('epochs', 50))
         
         # Convert relative path to absolute path if needed
@@ -617,11 +745,14 @@ def train_model():
         if not os.path.exists(dataset_path):
             return jsonify({'error': f'Dataset path does not exist: {dataset_path}'}), 400
         
-        # Get list of EDF files in the dataset
-        edf_files = [f.replace('.edf', '') for f in os.listdir(dataset_path) if f.endswith('.edf')]
+        # Get list of EDF files in the dataset (converted from MIT-BIH .hea+.dat)
+        record_files = [f.replace('.edf', '') for f in os.listdir(dataset_path) if f.endswith('.edf')]
         
-        if not edf_files:
-            return jsonify({'error': 'No EDF files found in the dataset path'}), 400
+        if not record_files:
+            return jsonify({'error': 'No EDF files found in the dataset path. Run the Pre-Processing conversion first.'}), 400
+        
+        # Create a backup of disk results before starting
+        backup_training_results()
         
         # Reset and update training status
         TRAINING_STATUS['status'] = 'running'
@@ -632,6 +763,10 @@ def train_model():
         TRAINING_STATUS['epochs'] = epochs
         TRAINING_STATUS['current_epoch'] = 0
         TRAINING_STATUS['image_files'] = []
+        TRAINING_STATUS['metrics'] = {'history': [], 'evaluation': None}
+
+        # Clear the stop event so the training loop runs
+        TRAINING_STOP_EVENT.clear()
 
         def run_training():
             """Run training in a separate thread"""
@@ -647,31 +782,49 @@ def train_model():
                 TRAINING_STATUS['message'] = 'Loading data and initializing model...'
                 TRAINING_STATUS['progress'] = 5
                 
-                # Capture output
-                old_stdout = sys.stdout
-                sys.stdout = mystdout = StringIO()
+                # Progress callback — called after each epoch by the training loop
+                def progress_update(epoch, total_epochs, train_loss, train_acc, val_loss, val_acc):
+                    TRAINING_STATUS['current_epoch'] = epoch
+                    TRAINING_STATUS['progress'] = int(5 + (epoch / total_epochs) * 85)
+                    TRAINING_STATUS['message'] = (
+                        f'Epoch {epoch}/{total_epochs} — '
+                        f'Train Acc: {train_acc:.1f}%, Val Acc: {val_acc:.1f}%'
+                    )
+                    # Accumulate per-epoch metrics
+                    TRAINING_STATUS['metrics']['history'].append({
+                        'epoch': epoch,
+                        'train_loss': round(train_loss, 4),
+                        'train_acc': round(train_acc, 2),
+                        'val_loss': round(val_loss, 4),
+                        'val_acc': round(val_acc, 2)
+                    })
                 
-                # Run training
+                # Run training (stop_event lets the loop break when stop is requested)
                 results = train_main(
                     base_path=dataset_path,
-                    file_names=edf_files,
+                    file_names=record_files,
                     num_channels=2,
                     segment_length=24,
                     use_sliding_window=True,
                     batch_size=32,
                     epochs=epochs,
                     learning_rate=0.001,
-                    train_model=True
+                    train_model=True,
+                    stop_event=TRAINING_STOP_EVENT,
+                    progress_callback=progress_update
                 )
                 
-                sys.stdout = old_stdout
-                
-                # Get training output
-                training_output = mystdout.getvalue()
-                
-                # Update progress during training
-                TRAINING_STATUS['message'] = 'Training in progress...'
-                TRAINING_STATUS['progress'] = 80
+                # Check if training was stopped by user
+                if TRAINING_STOP_EVENT.is_set():
+                    logger.info("Training stop detected. Rolling back results...")
+                    # Rollback the JSON results on disk to previous successful run
+                    rollback_training_results()
+                    
+                    # Ensure status indicates it was stopped (the rollback reloads memory, so we override status)
+                    TRAINING_STATUS['status'] = 'stopped'
+                    TRAINING_STATUS['message'] = 'Training stopped by user — rolling back to previous results.'
+                    TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+                    return
                 
                 # Find generated image files in backend/images folder
                 images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
@@ -693,6 +846,16 @@ def train_model():
                         shutil.copy2(src_path, dst_path)
                         break
                 
+                # Store evaluation metrics from results if available
+                if results and isinstance(results, dict):
+                    eval_metrics = results.get('metrics', {})
+                    TRAINING_STATUS['metrics']['evaluation'] = {
+                        'accuracy': round(float(eval_metrics.get('accuracy', 0)), 4),
+                        'precision': round(float(eval_metrics.get('precision', 0)), 4),
+                        'recall': round(float(eval_metrics.get('recall', 0)), 4),
+                        'f1': round(float(eval_metrics.get('f1', 0)), 4),
+                    }
+                
                 # Update training status to completed
                 TRAINING_STATUS['status'] = 'completed'
                 TRAINING_STATUS['progress'] = 100
@@ -700,18 +863,30 @@ def train_model():
                 TRAINING_STATUS['end_time'] = datetime.now().isoformat()
                 TRAINING_STATUS['image_files'] = image_files
                 
-                logger.info("Training completed successfully!")
+                # Persist results to disk
+                save_training_results()
+                
+                # Success — clear the backup
+                if os.path.exists(TRAINING_BACKUP_FILE):
+                    os.remove(TRAINING_BACKUP_FILE)
+                
+                logger.info("Training completed successfully! Backup cleared.")
                 
             except Exception as e:
                 logger.error(f"Training error: {e}")
+                # Rollback to last successful version on error
+                rollback_training_results()
+                
                 TRAINING_STATUS['status'] = 'failed'
                 TRAINING_STATUS['error'] = str(e)
-                TRAINING_STATUS['message'] = f'Training failed: {str(e)}'
+                TRAINING_STATUS['message'] = f'Training failed: {str(e)} — rolling back.'
                 TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+
         
         # Start training in background thread
-        training_thread = threading.Thread(target=run_training)
+        training_thread = threading.Thread(target=run_training, daemon=True)
         training_thread.start()
+        TRAINING_STATUS['training_thread'] = training_thread
         
         # Return immediately with status
         return jsonify({
@@ -720,7 +895,7 @@ def train_model():
             'status': 'running',
             'dataset_path': dataset_path,
             'epochs': epochs,
-            'files_count': len(edf_files)
+            'files_count': len(record_files)
         })
         
     except Exception as e:
@@ -733,40 +908,57 @@ def train_model():
 @api_bp.route('/training-status', methods=['GET'])
 def training_status():
     """
-    Get training status and results
+    Get training status and results.
+    Always returns existing images and model info regardless of training state.
+    On fresh server start (not_started), loads last saved results from disk.
     """
     global TRAINING_STATUS
     
     try:
-        # Check for model files
+        # Always check for existing model files
         models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
-        model_exists = os.path.exists(os.path.join(models_dir, 'dsnn_model.pth'))
+        model_files = {}
+        for mf in ['dsnn_model.pth', 'best_acc_model.pth', 'best_loss_model.pth']:
+            model_files[mf] = os.path.exists(os.path.join(models_dir, mf))
+        model_exists = any(model_files.values())
         
-        # Check for image files in the images directory
+        # Always check for existing image files (add timestamp for cache-busting)
         images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
-        image_files = []
+        import time
+        ts = int(time.time())
+        existing_images = []
         for f in ['training_history.png', 'confusion_matrix.png']:
             img_path = os.path.join(images_dir, f)
             if os.path.exists(img_path):
-                image_files.append('/images/' + f)
+                existing_images.append(f'/images/{f}?t={ts}')
         
-        # If model exists but status is running, check if images also exist
-        if model_exists and TRAINING_STATUS['status'] == 'running':
-            if image_files:
-                TRAINING_STATUS['status'] = 'completed'
-                TRAINING_STATUS['message'] = 'Training completed successfully!'
-                TRAINING_STATUS['progress'] = 100
-                TRAINING_STATUS['image_files'] = image_files
-            else:
-                # Training might still be running, check if thread is alive
-                if TRAINING_STATUS.get('training_thread') and not TRAINING_STATUS['training_thread'].is_alive():
-                    TRAINING_STATUS['status'] = 'stopped'
-                    TRAINING_STATUS['message'] = 'Training was stopped by user'
-                    TRAINING_STATUS['progress'] = 0
+        # If training thread died unexpectedly while status is still 'running'
+        if TRAINING_STATUS['status'] == 'running':
+            thread = TRAINING_STATUS.get('training_thread')
+            if thread and not thread.is_alive():
+                # Thread finished but status wasn't updated (crash?)
+                if not TRAINING_STOP_EVENT.is_set():
+                    TRAINING_STATUS['status'] = 'completed'
+                    TRAINING_STATUS['message'] = 'Training completed successfully!'
+                    TRAINING_STATUS['progress'] = 100
+                    TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+                    save_training_results()
         
-        # Update image files if we found them
-        if image_files:
-            TRAINING_STATUS['image_files'] = image_files
+        # If no training has happened this session, try to load saved results from disk
+        if TRAINING_STATUS['status'] == 'not_started':
+            saved = load_training_results()
+            if saved and saved.get('status') in ('completed', 'stopped', 'failed'):
+                # Populate the in-memory status from the saved file
+                TRAINING_STATUS['status'] = saved['status']
+                TRAINING_STATUS['progress'] = saved.get('progress', 0)
+                TRAINING_STATUS['message'] = saved.get('message', '')
+                TRAINING_STATUS['error'] = saved.get('error')
+                TRAINING_STATUS['start_time'] = saved.get('start_time')
+                TRAINING_STATUS['end_time'] = saved.get('end_time')
+                TRAINING_STATUS['epochs'] = saved.get('epochs', 0)
+                TRAINING_STATUS['current_epoch'] = saved.get('current_epoch', 0)
+                TRAINING_STATUS['metrics'] = saved.get('metrics', {'history': [], 'evaluation': None})
+                logger.info("Loaded last training results from disk.")
         
         return jsonify({
             'status': TRAINING_STATUS['status'],
@@ -775,8 +967,12 @@ def training_status():
             'error': TRAINING_STATUS['error'],
             'epochs': TRAINING_STATUS['epochs'],
             'current_epoch': TRAINING_STATUS['current_epoch'],
-            'image_files': TRAINING_STATUS['image_files'],
-            'model_exists': model_exists
+            'image_files': existing_images,
+            'model_exists': model_exists,
+            'model_files': model_files,
+            'metrics': TRAINING_STATUS['metrics'],
+            'start_time': TRAINING_STATUS['start_time'],
+            'end_time': TRAINING_STATUS['end_time']
         })
         
     except Exception as e:
@@ -798,10 +994,13 @@ def stop_training():
                 'message': 'No training is currently running'
             }), 400
         
-        # Mark as stopped - the training thread will check this flag
+        # Signal the training loop to stop
+        TRAINING_STOP_EVENT.set()
+        
+        # Mark as stopped
         TRAINING_STATUS['status'] = 'stopped'
-        TRAINING_STATUS['message'] = 'Training stop requested...'
-        TRAINING_STATUS['progress'] = 0
+        TRAINING_STATUS['message'] = 'Training stop requested — will stop after current epoch...'
+        TRAINING_STATUS['progress'] = TRAINING_STATUS.get('progress', 0)
         
         return jsonify({
             'success': True,

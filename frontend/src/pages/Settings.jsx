@@ -1,43 +1,106 @@
 import { useState } from 'react';
-import { Save, RefreshCw, Info, HardDrive, Brain, Bell, Shield } from 'lucide-react';
+import { Save, RefreshCw, Info, HardDrive, Brain, Bell, Shield, CheckCircle, Edit2, X } from 'lucide-react';
+
+const defaultSettings = {
+  modelPath: './models/dsnn_model.pth',
+  dataPath: './Dataset/MIT-BIH',
+  batchSize: 32,
+  numWorkers: 4,
+  confidenceThreshold: 60,
+  autoSave: true,
+  notifications: true,
+  darkMode: false
+};
 
 const Settings = () => {
-  const [settings, setSettings] = useState({
-    modelPath: './models/dsnn_model.pth',
-    dataPath: './Dataset/edf',
-    batchSize: 32,
-    numWorkers: 4,
-    confidenceThreshold: 80,
-    autoSave: true,
-    notifications: true,
-    darkMode: false
+  // Initialize state from localStorage or use defaults
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('appSettings');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse settings', e);
+      }
+    }
+    return defaultSettings;
   });
+
+  const [modalMessage, setModalMessage] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const handleSave = () => {
     localStorage.setItem('appSettings', JSON.stringify(settings));
-    alert('Settings saved successfully!');
+    setModalMessage('Settings saved successfully!');
+    setShowModal(true);
+    setIsEditing(false);
   };
 
   const handleReset = () => {
-    setSettings({
-      modelPath: './models/dsnn_model.pth',
-      dataPath: './Dataset/edf',
-      batchSize: 32,
-      numWorkers: 4,
-      confidenceThreshold: 80,
-      autoSave: true,
-      notifications: true,
-      darkMode: false
-    });
+    setSettings(defaultSettings);
+    localStorage.setItem('appSettings', JSON.stringify(defaultSettings));
+    setModalMessage('Settings reset to defaults');
+    setShowModal(true);
+    setIsEditing(false);
+  };
+  
+  const handleCancel = () => {
+    // Revert settings back to the saved state in localStorage
+    const saved = localStorage.getItem('appSettings');
+    if (saved) {
+      try {
+        setSettings(JSON.parse(saved));
+      } catch (e) {
+        setSettings(defaultSettings);
+      }
+    } else {
+      setSettings(defaultSettings);
+    }
+    setIsEditing(false);
   };
 
   return (
     <div className="settings-page">
-      <div className="page-header">
+      {/* Success Modal */}
+      {showModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '400px', textAlign: 'center' }}>
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ 
+                width: '48px', height: '48px', borderRadius: '50%', 
+                background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', 
+                display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' 
+              }}>
+                <CheckCircle size={28} />
+              </div>
+            </div>
+            <h3 style={{ marginTop: 0, marginBottom: '8px' }}>Success</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              {modalMessage}
+            </p>
+            <button 
+              className="btn btn-primary"
+              onClick={() => setShowModal(false)}
+              style={{ width: '100%' }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1>Settings</h1>
           <p className="text-secondary">Configure application preferences</p>
         </div>
+        {!isEditing && (
+          <button className="btn btn-primary" onClick={() => setIsEditing(true)}>
+            <Edit2 size={18} />
+            Edit Settings
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'grid', gap: '24px', maxWidth: '800px' }}>
@@ -61,6 +124,8 @@ const Settings = () => {
                 className="form-input"
                 value={settings.modelPath}
                 onChange={(e) => setSettings({...settings, modelPath: e.target.value})}
+                disabled={!isEditing}
+                style={{ opacity: !isEditing ? 0.7 : 1, cursor: !isEditing ? 'not-allowed' : 'text' }}
               />
             </div>
             
@@ -71,6 +136,8 @@ const Settings = () => {
                 className="form-input"
                 value={settings.batchSize}
                 onChange={(e) => setSettings({...settings, batchSize: parseInt(e.target.value)})}
+                disabled={!isEditing}
+                style={{ opacity: !isEditing ? 0.7 : 1, cursor: !isEditing ? 'not-allowed' : 'text' }}
               />
             </div>
             
@@ -81,6 +148,8 @@ const Settings = () => {
                 className="form-input"
                 value={settings.numWorkers}
                 onChange={(e) => setSettings({...settings, numWorkers: parseInt(e.target.value)})}
+                disabled={!isEditing}
+                style={{ opacity: !isEditing ? 0.7 : 1, cursor: !isEditing ? 'not-allowed' : 'text' }}
               />
             </div>
           </div>
@@ -106,6 +175,8 @@ const Settings = () => {
                 className="form-input"
                 value={settings.dataPath}
                 onChange={(e) => setSettings({...settings, dataPath: e.target.value})}
+                disabled={!isEditing}
+                style={{ opacity: !isEditing ? 0.7 : 1, cursor: !isEditing ? 'not-allowed' : 'text' }}
               />
             </div>
             
@@ -118,6 +189,8 @@ const Settings = () => {
                 max="100"
                 value={settings.confidenceThreshold}
                 onChange={(e) => setSettings({...settings, confidenceThreshold: parseInt(e.target.value)})}
+                disabled={!isEditing}
+                style={{ opacity: !isEditing ? 0.7 : 1, cursor: !isEditing ? 'not-allowed' : 'text' }}
               />
               <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                 Minimum confidence required to display a prediction
@@ -149,15 +222,18 @@ const Settings = () => {
                   type="checkbox"
                   checked={settings.autoSave}
                   onChange={(e) => setSettings({...settings, autoSave: e.target.checked})}
+                  disabled={!isEditing}
                   style={{ opacity: 0, width: 0, height: 0 }}
                 />
                 <span style={{
                   position: 'absolute',
-                  cursor: 'pointer',
+                  cursor: isEditing ? 'pointer' : 'not-allowed',
                   top: 0, left: 0, right: 0, bottom: 0,
                   backgroundColor: settings.autoSave ? 'var(--primary-color)' : 'var(--border-color)',
                   borderRadius: '24px',
-                  transition: '0.3s'
+                  transition: '0.3s',
+                  opacity: !isEditing ? 0.6 : 1,
+                  pointerEvents: isEditing ? 'auto' : 'none'
                 }}>
                   <span style={{
                     position: 'absolute',
@@ -184,15 +260,18 @@ const Settings = () => {
                   type="checkbox"
                   checked={settings.notifications}
                   onChange={(e) => setSettings({...settings, notifications: e.target.checked})}
+                  disabled={!isEditing}
                   style={{ opacity: 0, width: 0, height: 0 }}
                 />
                 <span style={{
                   position: 'absolute',
-                  cursor: 'pointer',
+                  cursor: isEditing ? 'pointer' : 'not-allowed',
                   top: 0, left: 0, right: 0, bottom: 0,
                   backgroundColor: settings.notifications ? 'var(--primary-color)' : 'var(--border-color)',
                   borderRadius: '24px',
-                  transition: '0.3s'
+                  transition: '0.3s',
+                  opacity: !isEditing ? 0.6 : 1,
+                  pointerEvents: isEditing ? 'auto' : 'none'
                 }}>
                   <span style={{
                     position: 'absolute',
@@ -244,16 +323,22 @@ const Settings = () => {
         </div>
 
         {/* Action Buttons */}
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-          <button className="btn btn-secondary" onClick={handleReset}>
-            <RefreshCw size={18} />
-            Reset to Defaults
-          </button>
-          <button className="btn btn-primary" onClick={handleSave}>
-            <Save size={18} />
-            Save Settings
-          </button>
-        </div>
+        {isEditing && (
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={handleReset}>
+              <RefreshCw size={18} />
+              Reset to Defaults
+            </button>
+            <button className="btn btn-secondary" onClick={handleCancel}>
+              <X size={18} />
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleSave}>
+              <Save size={18} />
+              Save Settings
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

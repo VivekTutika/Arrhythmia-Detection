@@ -113,7 +113,7 @@ def convert_dat_hea_to_edf(record_name, mitbih_base=None, output_base=None):
         units = record.units if record.units else []
         
         # Create EDF file writer with correct file type
-        file_type = pyedflib.FILETYPE_EDF
+        file_type = pyedflib.FILETYPE_EDFPLUS
         f = pyedflib.EdfWriter(output_file, num_signals, file_type)
         
         # Set file info
@@ -123,7 +123,7 @@ def convert_dat_hea_to_edf(record_name, mitbih_base=None, output_base=None):
         f.setBirthdate(datetime(2024, 1, 1))
         f.setStartdatetime(datetime(2024, 1, 1, 0, 0, 0))
         
-        # Set channel info and write signals
+        # Set channel info for each signal
         for i in range(num_signals):
             # Get signal name
             if i < len(sig_names):
@@ -137,26 +137,34 @@ def convert_dat_hea_to_edf(record_name, mitbih_base=None, output_base=None):
             else:
                 unit = "mV"
             
-            # Get physical min/max
-            physical_min = float(np.min(signals[:, i]))
-            physical_max = float(np.max(signals[:, i]))
+            # Get physical min/max with a small margin to avoid clipping
+            sig_data = signals[:, i]
+            physical_min = float(np.min(sig_data))
+            physical_max = float(np.max(sig_data))
             
             # Ensure non-zero range
             if physical_max == physical_min:
-                physical_max = physical_min + 1
+                physical_max = physical_min + 1.0
+            
+            # Add a tiny margin to prevent rounding issues at boundaries
+            margin = (physical_max - physical_min) * 0.001
+            physical_min -= margin
+            physical_max += margin
             
             # Set channel properties
             f.setLabel(i, label)
             f.setPhysicalDimension(i, unit)
+            f.setSamplefrequency(i, fs)
             f.setPhysicalMinimum(i, physical_min)
             f.setPhysicalMaximum(i, physical_max)
             f.setDigitalMinimum(i, -32768)
             f.setDigitalMaximum(i, 32767)
             f.setPrefilter(i, '')
             f.setTransducer(i, '')
-            
-            # Write signal data
-            f.writePhysicalSamples(signals[:, i])
+        
+        # Write ALL samples at once — writeSamples takes a list of arrays (one per channel)
+        signal_list = [signals[:, i].astype(np.float64) for i in range(num_signals)]
+        f.writeSamples(signal_list)
         
         # Close the file
         f.close()
@@ -202,17 +210,25 @@ def convert_atr_to_qrs(record_name, mitbih_base=None, output_base=None):
         
         output_file = os.path.join(output_base, f"{record_name}.qrs")
         
-        # Write QRS peak sample locations
-        # QRS format: sample number of each R-peak (one per line)
-        with open(output_file, 'w') as f:
-            for sample in annotation.sample:
-                f.write(f"{sample}\n")
+        # Write QRS annotations using wfdb.wrann (proper binary WFDB annotation format)
+        # Use 'N' symbol for all annotations since QRS just marks R-peak locations
+        num_annotations = len(annotation.sample)
+        symbols = ['N'] * num_annotations
+        
+        wfdb.wrann(
+            record_name,
+            'qrs',
+            sample=annotation.sample,
+            symbol=symbols,
+            fs=annotation.fs,
+            write_dir=output_base
+        )
         
         return {
             'success': True,
             'message': f"Successfully converted {record_name} annotations to QRS",
             'output_file': output_file,
-            'num_peaks': len(annotation.sample)
+            'num_peaks': num_annotations
         }
         
     except Exception as e:

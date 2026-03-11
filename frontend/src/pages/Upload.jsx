@@ -1,7 +1,22 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload as UploadIcon, FileAudio, CheckCircle, User, Calendar } from 'lucide-react';
-import toast from 'react-hot-toast';
+import defaultToast from 'react-hot-toast';
+
+const toast = {
+  success: (msg) => {
+    try {
+      const stored = localStorage.getItem('appSettings');
+      if (!stored || JSON.parse(stored).notifications) defaultToast.success(msg);
+    } catch { defaultToast.success(msg); }
+  },
+  error: (msg) => {
+    try {
+      const stored = localStorage.getItem('appSettings');
+      if (!stored || JSON.parse(stored).notifications) defaultToast.error(msg);
+    } catch { defaultToast.error(msg); }
+  }
+};
 import { analyzeECG } from '../services/api';
 
 const Upload = () => {
@@ -72,33 +87,59 @@ const Upload = () => {
 
     setIsUploading(true);
     const uploadedIds = [];
+    let firstResultData = null;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      setUploadProgress(prev => ({ ...prev, [file.name]: 'uploading' }));
+    // Group files by base name to pair .edf with .qrs
+    const fileGroups = {};
+    files.forEach(f => {
+      const baseName = f.name.substring(0, f.name.lastIndexOf('.'));
+      const ext = f.name.substring(f.name.lastIndexOf('.') + 1).toLowerCase();
+      if (!fileGroups[baseName]) fileGroups[baseName] = {};
+      fileGroups[baseName][ext] = f;
+    });
+
+    let index = 0;
+    for (const [baseName, group] of Object.entries(fileGroups)) {
+      if (!group.edf) {
+        toast.error(`Missing .edf file for ${baseName}`);
+        continue;
+      }
+      
+      const edfFile = group.edf;
+      const qrsFile = group.qrs || null;
+      
+      setUploadProgress(prev => ({ ...prev, [edfFile.name]: 'uploading' }));
+      if (qrsFile) setUploadProgress(prev => ({ ...prev, [qrsFile.name]: 'uploading' }));
 
       try {
         // Include patient information
         const patientInfo = {
           name: patientName || 'Anonymous',
           age: patientAge || 'N/A',
-          id: `patient_${Date.now()}_${i}`
+          id: `patient_${Date.now()}_${index}`
         };
 
-        const response = await analyzeECG(file, patientInfo);
+        const response = await analyzeECG(edfFile, qrsFile, patientInfo);
         uploadedIds.push(response.id);
-        setUploadProgress(prev => ({ ...prev, [file.name]: 'completed' }));
-        toast.success(`Analysis complete for ${file.name}`);
+        if (index === 0 && response.result_data) {
+          firstResultData = response.result_data;
+        }
+        
+        setUploadProgress(prev => ({ ...prev, [edfFile.name]: 'completed' }));
+        if (qrsFile) setUploadProgress(prev => ({ ...prev, [qrsFile.name]: 'completed' }));
+        toast.success(`Analysis complete for ${baseName}`);
       } catch (error) {
-        setUploadProgress(prev => ({ ...prev, [file.name]: 'error' }));
-        toast.error(`Failed to analyze ${file.name}`);
+        setUploadProgress(prev => ({ ...prev, [edfFile.name]: 'error' }));
+        if (qrsFile) setUploadProgress(prev => ({ ...prev, [qrsFile.name]: 'error' }));
+        toast.error(`Failed to analyze ${baseName}`);
       }
+      index++;
     }
 
     setIsUploading(false);
     
     if (uploadedIds.length > 0) {
-      navigate(`/results/${uploadedIds[0]}`);
+      navigate(`/results/${uploadedIds[0]}`, { state: { resultData: firstResultData } });
     }
   };
 

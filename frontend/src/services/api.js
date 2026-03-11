@@ -37,10 +37,20 @@ apiClient.interceptors.response.use(
 // ============ API Methods ============
 
 // Analyze ECG file
-export const analyzeECG = async (file, patientInfo = {}) => {
+export const analyzeECG = async (edfFile, qrsFile, patientInfo = {}) => {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', edfFile);
+  if (qrsFile) {
+    formData.append('qrs_file', qrsFile);
+  }
   formData.append('patient_info', JSON.stringify(patientInfo));
+  
+  try {
+    const savedSettings = localStorage.getItem('appSettings');
+    if (savedSettings) formData.append('settings', savedSettings);
+  } catch (e) {
+    console.error('Error stringifying settings', e);
+  }
   
   const response = await apiClient.post('/api/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
