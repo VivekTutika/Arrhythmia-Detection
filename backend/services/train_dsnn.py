@@ -145,9 +145,9 @@ class DSNN(nn.Module):
         self.drop1 = nn.Dropout(0.2)
         
         # Block 2: Mid-level features with residual (ST/T wave patterns)
-        self.conv3 = nn.Conv1d(32, 64, kernel_size=5, stride=1, padding=2)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=5, stride=1, padding=4, dilation=2)
         self.bn3 = nn.BatchNorm1d(64)
-        self.conv4 = nn.Conv1d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv1d(64, 64, kernel_size=3, stride=1, padding=4, dilation=4)
         self.bn4 = nn.BatchNorm1d(64)
         self.shortcut = nn.Sequential(
             nn.Conv1d(32, 64, kernel_size=1),
@@ -235,9 +235,13 @@ class DSNNSystem:
         print("✓ Validation criterion: Unweighted CrossEntropyLoss (smooth, unbiased metric)")
             
         # 3. Optimization setup with gradient clipping
-        optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         # ReduceLROnPlateau: reduce LR when validation loss stops improving (stable, no restarts)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=epochs,
+            eta_min=1e-6
+        )
         
         best_val_acc = 0.0
         best_val_loss = float('inf')
@@ -303,7 +307,7 @@ class DSNNSystem:
             val_acc = 100 * val_correct / val_total
             
             # Step the scheduler based on validation loss
-            scheduler.step(avg_val_loss)
+            scheduler.step()
             
             current_lr = optimizer.param_groups[0]['lr']
             
@@ -381,11 +385,20 @@ class DSNNSystem:
         return {'history': formatted_history}
     
     def _plot_training_history(self, history):
+        def smooth_curve(values, weight=0.8):
+            smoothed = []
+            last = values[0]
+            for v in values:
+                smoothed_val = last * weight + (1 - weight) * v
+                smoothed.append(smoothed_val)
+                last = smoothed_val
+            return smoothed 
+        
         plt.figure(figsize=(12, 5))
         
         plt.subplot(1, 2, 1)
-        plt.plot(history['train_loss'], label='Train Loss')
-        plt.plot(history['val_loss'], label='Validation Loss')
+        plt.plot(smooth_curve(history['train_loss']), label='Train Loss')
+        plt.plot(smooth_curve(history['val_loss']), label='Validation Loss')
         plt.title('Model Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
@@ -393,8 +406,8 @@ class DSNNSystem:
         plt.grid(True)
         
         plt.subplot(1, 2, 2)
-        plt.plot(history['train_acc'], label='Train Accuracy')
-        plt.plot(history['val_acc'], label='Validation Accuracy')
+        plt.plot(smooth_curve(history['train_acc']), label='Train Accuracy')
+        plt.plot(smooth_curve(history['val_acc']), label='Validation Accuracy')
         plt.title('Model Accuracy')
         plt.xlabel('Epoch')
         plt.ylabel('Accuracy (%)')
@@ -402,7 +415,7 @@ class DSNNSystem:
         plt.grid(True)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(IMAGES_DIR, 'training_history.png'))
+        plt.savefig(os.path.join(IMAGES_DIR, 'training_history.png'),dpi=300,bbox_inches='tight')
         plt.close()
     
     def evaluate_model(self, test_loader):
@@ -458,8 +471,10 @@ class DSNNSystem:
         
         classes = np.unique(labels)
         class_names = [self.class_names.get(c, f"Class {c}") for c in classes]
-        
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+
+        cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+        sns.heatmap(cm_normalized, annot=True, fmt='.2f', cmap='Blues', 
                    xticklabels=class_names, yticklabels=class_names)
         
         plt.xlabel('Predicted')
@@ -497,6 +512,10 @@ class ECGDataset(Dataset):
             if np.random.random() < 0.5:
                 noise = np.random.normal(0, 0.05, segment.shape).astype(np.float32)
                 segment = segment + noise
+
+            if np.random.random() < 0.3:
+                drift = np.sin(np.linspace(0, 3*np.pi, segment.shape[-1])) * 0.02
+                segment = segment + drift
             
             # 2. Random amplitude scaling (0.8-1.2x): handles inter-patient gain differences
             if np.random.random() < 0.5:
@@ -922,7 +941,7 @@ def extract_segments_around_rpeaks(leads, r_peaks, segment_length=256, offset=No
     return segments
 
 
-def extract_segments_sliding_window(leads, segment_length=24, stride=12):
+def extract_segments_sliding_window(leads, segment_length=256, stride=24):
     num_channels = len(leads)
     segments = []
     
