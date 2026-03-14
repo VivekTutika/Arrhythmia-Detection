@@ -185,7 +185,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings=No
         
         # Initialize DSNN model
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model = DSNN(input_channels=2, sequence_length=256, num_classes=6)
+        model = DSNN(input_channels=4, sequence_length=256, num_classes=6)
         model.to(device)
         
         # Try to load trained model weights if available
@@ -805,7 +805,7 @@ def train_model():
                     file_names=record_files,
                     num_channels=2,
                     segment_length=256,
-                    use_sliding_window=True,
+                    use_sliding_window=False,
                     batch_size=32,
                     epochs=epochs,
                     learning_rate=0.001,

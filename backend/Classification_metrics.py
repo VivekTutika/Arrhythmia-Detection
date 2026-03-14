@@ -10,7 +10,7 @@ class ClassificationMetrics:
     for multi-class classification problems, with special handling for binary tasks.
     """
     
-    def __init__(self, num_classes=6):
+    def __init__(self, num_classes=5):
         """
         Initialize the metrics calculator with the number of classes.
         
@@ -322,7 +322,7 @@ class ClassificationMetrics:
             print(f"{'Macro ROC-AUC':<20} {metrics['roc_auc'].get('macro_average', 0):.4f}")
 
 
-def evaluate_dsnn_model(model, data_loader, device, num_classes=6, class_names=None):
+def evaluate_dsnn_model(model, data_loader, device, num_classes=5, class_names=None):
     """
     Evaluate a DSNN model on a test dataset and return comprehensive metrics.
     
@@ -404,7 +404,7 @@ def evaluate_example():
         model=model,  # Your DSNN model
         data_loader=test_loader,  # Your test data loader
         device=device,  # 'cuda' or 'cpu'
-        num_classes=6,
+        num_classes=5,
         class_names=class_names
     )
     
