@@ -427,11 +427,11 @@ const ModelTraining = ({ setIsLoading }) => {
               {training && trainingStatus && (
                 <div className="training-progress-section">
                   <div className="processing-progress">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>
-                        {trainingStatus.message || 'Initializing...'}
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', marginRight: '8px' }}>
+                        {`${trainingStatus.message} |` || 'Initializing...'}
                       </span>
-                      <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
                         {trainingStatus.progress || 0}%
                       </span>
                     </div>
@@ -444,7 +444,7 @@ const ModelTraining = ({ setIsLoading }) => {
                         }}
                       ></div>
                     </div>
-                    <div className="processing-progress-text" style={{ marginTop: '6px' }}>
+                    <div className="processing-progress-text">
                       {trainingStatus.current_epoch > 0 
                         ? `Epoch ${trainingStatus.current_epoch}/${trainingStatus.epochs} — Click "Stop Training" to cancel`
                         : 'Loading data and initializing model... This may take a minute.'

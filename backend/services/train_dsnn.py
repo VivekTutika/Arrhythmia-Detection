@@ -439,7 +439,7 @@ class DSNNSystem:
         return {'history': formatted_history}
     
     def _plot_training_history(self, history):
-        def smooth_curve(values, weight=0.8):
+        def smooth_curve(values, weight=0.6):
             smoothed = []
             last = values[0]
             for v in values:
@@ -1378,7 +1378,7 @@ def main(base_path, file_names, num_channels=2, segment_length=256, use_sliding_
         batch_size=batch_size,
         sampler=sampler
     )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Only create test loader if we have test data
     test_loader = None
