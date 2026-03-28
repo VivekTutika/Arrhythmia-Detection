@@ -174,7 +174,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings=No
         file_name = os.path.splitext(os.path.basename(filepath))[0]
         
         # Process the file - Shift to Peak-Triggered Inference
-        file_info = process_single_file(base_path, file_name, using_sliding_window=False)
+        file_info = process_single_file(base_path, file_name, using_sliding_window=False, segment_length=384)
         
         if file_info is None or len(file_info.get('segments', [])) == 0:
             # Fallback if file processing fails
@@ -185,7 +185,7 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings=No
         
         # Initialize DSNN model
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model = DSNN(input_channels=4, sequence_length=256, num_classes=6)
+        model = DSNN(input_channels=4, sequence_length=384, num_classes=6)
         model.to(device)
         
         # Try to load trained model weights if available
@@ -200,8 +200,9 @@ def process_ecg_with_dsnn(filepath, result_id, filename, patient_id, settings=No
             else:
                 model_paths.append(custom_model)
                 
-        # Fallback priority
+        # Fallback priority: F1 model first (best class separation), then accuracy, loss, generic
         model_paths.extend([
+            os.path.join(models_dir, 'models', 'best_f1_model.pth'),
             os.path.join(models_dir, 'models', 'best_acc_model.pth'),
             os.path.join(models_dir, 'models', 'best_loss_model.pth'),
             os.path.join(models_dir, 'models', 'dsnn_model.pth')
@@ -804,11 +805,11 @@ def train_model():
                     base_path=dataset_path,
                     file_names=record_files,
                     num_channels=2,
-                    segment_length=256,
+                    segment_length=384,
                     use_sliding_window=False,
                     batch_size=32,
                     epochs=epochs,
-                    learning_rate=0.001,
+                    learning_rate=3e-4,
                     train_model=True,
                     stop_event=TRAINING_STOP_EVENT,
                     progress_callback=progress_update

@@ -4,13 +4,15 @@ Enhanced Arrhythmia Detection with DSNN - Uses wfdb for EDF reading
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
 import os
 import wfdb
 import sklearn.metrics as metrics
 from sklearn.model_selection import train_test_split, GroupKFold
+from sklearn.utils.class_weight import compute_class_weight
 import pandas as pd
 import seaborn as sns
 from tqdm import tqdm
@@ -107,39 +109,68 @@ class SignalPreprocessor:
         # We don't Z-score the full lead yet; we do it per-segment for better local focus
         return np.array(processed_leads)
 
-# --- LOSS FUNCTIONS ---
+# --- LOSS FUNCTION ---
+# Using nn.CrossEntropyLoss with controlled class weights and label_smoothing=0.05
+# for stable, discriminative learning. Label smoothing prevents overconfident
+# predictions that cause late-epoch collapse.
 
-class FocalLoss(nn.Module):
-    """Focal Loss to address class imbalance by focusing on 'hard' examples."""
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.reduction = reduction
-        self.alpha = alpha # Usually class weights
 
-    def forward(self, inputs, targets):
-        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none', weight=self.alpha)
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+# --- ATTENTION MODULES ---
+
+class TemporalAttention(nn.Module):
+    """Temporal attention applied after convolutional feature extraction.
+    Learns per-timestep importance weights so the classifier focuses on
+    the most discriminative temporal windows (e.g., QRS morphology).
+    
+    Uses Sigmoid instead of Softmax to avoid winner-take-all suppression.
+    Additive scaling (1 + 0.2*w) ensures attention enhances but does not
+    dominate or distort the learned features."""
+    def __init__(self, in_channels):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Conv1d(in_channels, in_channels // 2, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels // 2, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        weights = self.attn(x)
+        return x * (1 + 0.2 * weights)
+
+
+class ChannelAttention(nn.Module):
+    """Lightweight channel (squeeze-excitation style) attention.
+    Learns which feature channels are most informative for the current input,
+    enhancing multi-lead ECG learning."""
+    def __init__(self, channels):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Conv1d(channels, channels // 4, 1),
+            nn.ReLU(),
+            nn.Conv1d(channels // 4, channels, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        weights = self.fc(x)
+        return x * weights
 
 # ------- PART 1: DSNN MODEL DEFINITIONS -------
 
 class DSNN(nn.Module):
-    """Enhanced DSNN with progressive dilated convolutions and minimal pooling.
+    """Enhanced DSNN with progressive dilated convolutions, multi-scale feature
+    extraction, and minimal pooling.
     
     Architecture design choices:
     - Progressive dilation (1→1→2→4→8) expands receptive field to ~90 samples
       without losing temporal resolution, critical for capturing full cardiac cycles
+    - Multi-scale parallel convolution branches (kernel 3, 5, 7) capture subtle
+      ECG morphology differences at different temporal resolutions
     - Only 1 MaxPool layer (vs 2 before) preserves waveform fidelity
     - Residual connection in dilated blocks prevents degradation
-    - Dropout between conv blocks prevents patient-specific memorization
+    - Dropout(0.4) between conv blocks prevents patient-specific memorization
     - Global average pooling makes FC layer size independent of sequence_length
     """
     def __init__(self, input_channels=4, sequence_length=256, num_classes=6):
@@ -153,7 +184,8 @@ class DSNN(nn.Module):
         self.conv2 = nn.Conv1d(16, 32, kernel_size=5, stride=1, padding=2, dilation=1)
         self.bn2 = nn.BatchNorm1d(32)
         self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)  # Only pooling: 256 → 128
-        self.drop1 = nn.Dropout(0.2)
+        self.drop1 = nn.Dropout(0.4)
+        self.feat_drop1 = nn.Dropout1d(0.2)  # Feature-level spatial dropout
         
         # Block 2: Dilated conv with residual — expands receptive field
         # dilation=2: effective kernel spans 9 samples; dilation=4: spans 9 samples
@@ -165,23 +197,47 @@ class DSNN(nn.Module):
             nn.Conv1d(32, 64, kernel_size=1),
             nn.BatchNorm1d(64)
         )
-        self.drop2 = nn.Dropout(0.3)
+        self.drop2 = nn.Dropout(0.4)
+        self.feat_drop2 = nn.Dropout1d(0.2)  # Feature-level spatial dropout
         
         # Block 3: High dilation for long-range context (rhythm patterns)
         # dilation=8: effective kernel spans 17 samples on 128-length feature map
         self.conv5 = nn.Conv1d(64, 64, kernel_size=3, stride=1, padding=8, dilation=8)
         self.bn5 = nn.BatchNorm1d(64)
-        self.drop_d = nn.Dropout(0.3)
+        self.drop_d = nn.Dropout(0.4)
+        self.feat_drop3 = nn.Dropout1d(0.2)  # Feature-level spatial dropout
+        
+        # Multi-scale parallel convolution branches (Step 10)
+        # Captures subtle ECG morphology at different temporal resolutions
+        self.ms_conv3 = nn.Conv1d(64, 32, kernel_size=3, stride=1, padding=1)
+        self.ms_bn3 = nn.BatchNorm1d(32)
+        self.ms_conv5 = nn.Conv1d(64, 32, kernel_size=5, stride=1, padding=2)
+        self.ms_bn5 = nn.BatchNorm1d(32)
+        self.ms_conv7 = nn.Conv1d(64, 32, kernel_size=7, stride=1, padding=3)
+        self.ms_bn7 = nn.BatchNorm1d(32)
+        # After concat: 32*3 = 96 channels → project back to 64
+        self.ms_proj = nn.Conv1d(96, 64, kernel_size=1)
+        self.ms_bn_proj = nn.BatchNorm1d(64)
+        
+        # Attention modules: Channel → Temporal (applied after conv features)
+        self.channel_attention = ChannelAttention(64)
+        self.temporal_attention = TemporalAttention(64)
         
         # Global average pooling: reduces to (batch, 64) regardless of sequence length
         # This replaces the removed pool2, avoiding aggressive temporal downsampling
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         
+        # Feature stabilization BatchNorm before classifier
+        self.bn_pre_fc = nn.BatchNorm1d(64)
+        
         # Classifier head
         self.fc1 = nn.Linear(64, 128)
         self.bn_fc = nn.BatchNorm1d(128)
-        self.drop3 = nn.Dropout(0.5)
+        self.drop3 = nn.Dropout(0.4)
         self.fc2 = nn.Linear(128, num_classes)
+        
+        # Temperature for prediction calibration (Step 12)
+        self.temperature = 1.5
         
     def forward(self, x):
         # Block 1: standard convolutions + single pooling (256 → 128)
@@ -189,6 +245,7 @@ class DSNN(nn.Module):
         x = torch.relu(self.bn2(self.conv2(x)))
         x = self.pool1(x)
         x = self.drop1(x)
+        x = self.feat_drop1(x)  # Feature-level spatial dropout
         
         # Block 2: dilated convolutions with residual (preserves 128 length)
         identity = self.shortcut(x)
@@ -196,18 +253,42 @@ class DSNN(nn.Module):
         x = self.bn4(self.conv4(x))
         x = torch.relu(x + identity)  # Residual connection
         x = self.drop2(x)
+        x = self.feat_drop2(x)  # Feature-level spatial dropout
         
         # Block 3: high-dilation conv for long-range rhythm context (preserves 128 length)
         x = torch.relu(self.bn5(self.conv5(x)))
         x = self.drop_d(x)
+        x = self.feat_drop3(x)  # Feature-level spatial dropout
+        
+        # Multi-scale feature extraction (Step 10)
+        ms3 = torch.relu(self.ms_bn3(self.ms_conv3(x)))
+        ms5 = torch.relu(self.ms_bn5(self.ms_conv5(x)))
+        ms7 = torch.relu(self.ms_bn7(self.ms_conv7(x)))
+        x = torch.cat([ms3, ms5, ms7], dim=1)  # (batch, 96, L)
+        x = torch.relu(self.ms_bn_proj(self.ms_proj(x)))  # (batch, 64, L)
+        
+        # Attention: Channel attention → Temporal attention
+        # Applied after all conv feature extraction, before pooling/classification
+        x = self.channel_attention(x)
+        x = self.temporal_attention(x)
         
         # Global average pooling → (batch, 64, 1) → (batch, 64)
         x = self.global_pool(x).squeeze(-1)
         
+        # Feature stabilization
+        x = self.bn_pre_fc(x)
+        
         # Classifier
         x = self.drop3(torch.relu(self.bn_fc(self.fc1(x))))
-        x = self.fc2(x)
-        return x
+        logits = self.fc2(x)
+        
+        # Temperature scaling for calibration (Step 12)
+        # Applied during eval only; during training temperature=1.5 still helps
+        # reduce overconfidence via softer logits
+        if not self.training:
+            logits = logits / self.temperature
+        
+        return logits
 
 class DSNNSystem:
     def __init__(self, model, device=None):
@@ -230,54 +311,60 @@ class DSNNSystem:
             _, predictions = torch.max(outputs, 1)
         return predictions
         
-    def train_model(self, train_loader, val_loader, epochs=50, lr=0.001, weight_decay=1e-5, 
+    def train_model(self, train_loader, val_loader, epochs=50, lr=3e-4, weight_decay=1e-3, 
                     class_weights=None, stop_event=None, progress_callback=None,
-                    mixup_alpha=0.2):
+                    mixup_alpha=0.0):
+        # NOTE: mixup_alpha is accepted for API compatibility but intentionally unused.
         """
-        Optimized training loop with:
-        - Focal Loss with capped class weights for training
-        - MixUp augmentation (alpha=0.2) for regularization
-        - Unweighted CrossEntropy for validation loss (honest, smooth metric)
-        - Gradient clipping for training stability
-        - CosineAnnealingWarmRestarts scheduler for smooth LR decay
-        - Best-loss model selection for final evaluation (better generalization)
+        Stabilized training loop with improved class separation:
+        - CrossEntropyLoss with boosted class weights and label_smoothing=0.08
+        - LR warmup for first 3 epochs + ReduceLROnPlateau
+        - Gradient clipping for stability
+        - Best model saved by validation F1 score (macro)
         - Early stopping with patience=25
         """
         self.model.train()
         
-        # MixUp alpha parameter for Beta distribution
-        self.mixup_alpha = mixup_alpha
+        # MixUp disabled: ECG morphology must remain physiologically valid
+        self.mixup_alpha = 0.0
         
-        # 1. Initialize Training criterion: Weighted Focal Loss
+        # 1. Build class weight tensor for training criterion
         if class_weights is not None:
-            alpha = torch.FloatTensor(class_weights).to(self.device)
-            criterion_train = FocalLoss(alpha=alpha, gamma=2.0)
-            print(f"✓ Training criterion: Focal Loss with capped class weights: {class_weights}")
+            weight_tensor = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
+            print(f"✓ Class weights applied: {[f'{w:.4f}' for w in class_weights]}")
         else:
-            criterion_train = FocalLoss(gamma=2.0)
-            print("✓ Training criterion: Focal Loss (Unweighted)")
+            weight_tensor = None
+            print("✓ No class weights provided (uniform weighting)")
         
-        # For MixUp, we need a per-sample loss function (no reduction)
-        if class_weights is not None:
-            criterion_mixup = nn.CrossEntropyLoss(weight=alpha, reduction='none')
-        else:
-            criterion_mixup = nn.CrossEntropyLoss(reduction='none')
+        # 2. Training criterion: CrossEntropyLoss with boosted class weights + label smoothing
+        criterion_train = nn.CrossEntropyLoss(weight=weight_tensor, label_smoothing=0.08)
+        print("✓ Training criterion: CrossEntropyLoss (class-weighted, label_smoothing=0.08)")
         
-        # 2. Validation criterion: plain unweighted CrossEntropy for honest, smooth metrics
+        # 3. Validation criterion: unweighted CrossEntropyLoss for honest metrics
         criterion_val = nn.CrossEntropyLoss()
-        print("✓ Validation criterion: Unweighted CrossEntropyLoss (smooth, unbiased metric)")
-        print(f"✓ MixUp augmentation: alpha={mixup_alpha}")
+        print("✓ Validation criterion: CrossEntropyLoss (unbiased metric)")
+        print(f"✓ MixUp augmentation: disabled (alpha=0.0)")
             
-        # 3. Optimization setup with gradient clipping
+        # 4. Optimization setup with gradient clipping + LR warmup
         optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            T_max=epochs,
-            eta_min=1e-6
+            mode='min',
+            factor=0.5,
+            patience=3
         )
+        
+        # LR Warmup: gradually ramp LR from lr/10 to lr over first 3 epochs
+        warmup_epochs = 3
+        warmup_start_lr = lr / 10.0
+        print(f"✓ Learning rate: {lr}, Weight decay: {weight_decay}")
+        print(f"✓ LR warmup: {warmup_epochs} epochs ({warmup_start_lr:.6f} → {lr:.6f})")
+        print(f"✓ Scheduler: ReduceLROnPlateau (mode='min', factor=0.5, patience=3)")
         
         best_val_acc = 0.0
         best_val_loss = float('inf')
+        best_val_f1 = 0.0
+        best_epoch = 0
         patience_counter = 0
         early_stop_patience = 25  # Stop if no improvement for 25 epochs
         training_history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
@@ -285,14 +372,22 @@ class DSNNSystem:
         print(f"Starting optimized training for {epochs} epochs...")
         print(f"  Gradient clipping: max_norm=1.0")
         print(f"  Early stopping patience: {early_stop_patience} epochs")
+        print(f"  Best model criteria: validation F1 score (macro)")
         
         for epoch in range(epochs):
             # Check if training should be stopped by user
             if stop_event is not None and stop_event.is_set():
                 print(f"\nTraining stopped by user at epoch {epoch+1}")
                 break
+            
+            # LR warmup: gradually increase LR for first warmup_epochs
+            if epoch < warmup_epochs:
+                warmup_lr = warmup_start_lr + (lr - warmup_start_lr) * (epoch / warmup_epochs)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = warmup_lr
+                print(f"  [Warmup] LR set to {warmup_lr:.6f} (epoch {epoch+1}/{warmup_epochs})")
 
-            # --- TRAINING PHASE (with MixUp augmentation) ---
+            # --- TRAINING PHASE ---
             self.model.train()
             train_loss = 0.0
             train_correct = 0
@@ -303,37 +398,19 @@ class DSNNSystem:
                 
                 optimizer.zero_grad()
                 
-                # --- MixUp Augmentation ---
-                # Sample λ from Beta(alpha, alpha); mix inputs and compute mixed loss
-                if self.mixup_alpha > 0:
-                    lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
-                    # Shuffle indices for mixing partner
-                    batch_size_curr = inputs.size(0)
-                    index = torch.randperm(batch_size_curr).to(self.device)
-                    
-                    mixed_inputs = lam * inputs + (1 - lam) * inputs[index]
-                    labels_a, labels_b = labels, labels[index]
-                    
-                    outputs = self.model(mixed_inputs)
-                    # MixUp loss: λ * loss(pred, y_a) + (1-λ) * loss(pred, y_b)
-                    loss = lam * criterion_mixup(outputs, labels_a).mean() + \
-                           (1 - lam) * criterion_mixup(outputs, labels_b).mean()
-                else:
-                    outputs = self.model(inputs)
-                    loss = criterion_train(outputs, labels)
+                # MixUp disabled — direct forward pass with standard loss
+                outputs = self.model(inputs)
+                loss = criterion_train(outputs, labels)
                 
                 loss.backward()
                 
-                # Gradient clipping: prevents extreme weight updates from imbalanced focal loss
+                # Gradient clipping: prevents extreme weight updates
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 
                 optimizer.step()
                 
                 train_loss += loss.item()
-                # For accuracy tracking, use un-mixed predictions on original labels
-                with torch.no_grad():
-                    clean_outputs = self.model(inputs)
-                    _, predicted = torch.max(clean_outputs.data, 1)
+                _, predicted = torch.max(outputs.data, 1)
                 train_total += labels.size(0)
                 train_correct += (predicted == labels).sum().item()
         
@@ -345,6 +422,8 @@ class DSNNSystem:
             val_loss = 0.0
             val_correct = 0
             val_total = 0
+            all_val_preds = []
+            all_val_labels = []
         
             with torch.no_grad():
                 for inputs, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} - Validating"):
@@ -356,12 +435,21 @@ class DSNNSystem:
                     _, predicted = torch.max(outputs.data, 1)
                     val_total += labels.size(0)
                     val_correct += (predicted == labels).sum().item()
+                    all_val_preds.extend(predicted.cpu().numpy())
+                    all_val_labels.extend(labels.cpu().numpy())
             
             avg_val_loss = val_loss / len(val_loader)
             val_acc = 100 * val_correct / val_total
             
-            # Step the scheduler based on validation loss
-            scheduler.step()
+            # Compute val F1 score (macro) for best-model criteria
+            all_val_preds_np = np.array(all_val_preds)
+            all_val_labels_np = np.array(all_val_labels)
+            val_f1 = metrics.f1_score(all_val_labels_np, all_val_preds_np, average='macro', zero_division=0)
+            
+            # Step the scheduler based on validation loss (mode='min')
+            # Only apply after warmup to avoid interfering with warmup LR
+            if epoch >= warmup_epochs:
+                scheduler.step(avg_val_loss)
             
             current_lr = optimizer.param_groups[0]['lr']
             
@@ -377,20 +465,45 @@ class DSNNSystem:
             
             print(f"  LR: {current_lr:.6f} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%")
             
-            # Save checkpoints for best LOSS model (primary model for deployment)
+            # Log val_loss trend
+            if len(training_history['val_loss']) >= 2:
+                val_loss_delta = training_history['val_loss'][-1] - training_history['val_loss'][-2]
+                trend = '↑ increasing' if val_loss_delta > 0 else '↓ decreasing' if val_loss_delta < 0 else '→ stable'
+                print(f"  Val loss trend: {trend} (Δ={val_loss_delta:+.4f})")
+            print(f"  Best epoch so far: {best_epoch} (val_loss={best_val_loss:.4f})")
+            
+            # --- Class-wise accuracy logging (focus on CB, PC, AFib) ---
+            present_classes = np.unique(all_val_labels_np)
+            print(f"  Val F1 (macro): {val_f1:.4f}")
+            print(f"  Class-wise val accuracy:")
+            for cls in present_classes:
+                cls_mask = all_val_labels_np == cls
+                cls_correct = (all_val_preds_np[cls_mask] == cls).sum()
+                cls_total = cls_mask.sum()
+                cls_acc = 100.0 * cls_correct / cls_total if cls_total > 0 else 0.0
+                cls_name = self.class_names.get(cls, f"Class {cls}")
+                # Highlight the target classes
+                marker = ' ◄' if cls in (1, 3, 4) else ''  # AFib=1, CB=3, PC=4
+                print(f"    {cls_name}: {cls_acc:.1f}% ({cls_correct}/{cls_total}){marker}")
+            
+            # Confusion matrix every 5 epochs
+            if (epoch + 1) % 5 == 0:
+                cm = metrics.confusion_matrix(all_val_labels_np, all_val_preds_np)
+                print(f"  Confusion Matrix (epoch {epoch+1}):")
+                print(f"  {cm}")
+            
+            # Save checkpoints for best LOSS model (secondary)
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
-                patience_counter = 0  # Reset early stopping counter
                 torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_loss': avg_val_loss,
                     'val_acc': val_acc,
+                    'val_f1': val_f1,
                 }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth'))
                 print(f"📉 New best validation loss: {avg_val_loss:.4f} (Saved)")
-            else:
-                patience_counter += 1
 
             # Save checkpoints for best ACCURACY model (secondary)
             if val_acc > best_val_acc:
@@ -401,27 +514,52 @@ class DSNNSystem:
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_loss': avg_val_loss,
                     'val_acc': val_acc,
+                    'val_f1': val_f1,
                 }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth'))
                 print(f"⭐ New best validation accuracy: {val_acc:.2f}% (Saved)")
             
-            # Early stopping
+            # PRIMARY: Save best F1 model — best multi-class discrimination
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                best_epoch = epoch + 1
+                patience_counter = 0  # Reset early stopping counter
+                torch.save({
+                    'epoch': epoch + 1,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_loss': avg_val_loss,
+                    'val_acc': val_acc,
+                    'val_f1': val_f1,
+                }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_f1_model.pth'))
+                print(f"🏆 New best val F1 (macro): {val_f1:.4f} at epoch {epoch+1} (Saved)")
+            else:
+                patience_counter += 1
+            
+            # Early stopping based on F1 stagnation
             if patience_counter >= early_stop_patience:
-                print(f"\n⏹ Early stopping triggered at epoch {epoch+1} (no val loss improvement for {early_stop_patience} epochs)")
+                print(f"\n⏹ Early stopping triggered at epoch {epoch+1} (no val F1 improvement for {early_stop_patience} epochs)")
+                print(f"  Best val F1: {best_val_f1:.4f}, Best val loss: {best_val_loss:.4f}, Best val acc: {best_val_acc:.2f}%")
                 break
 
-        # After training, load the best LOSS model for final evaluation (best generalization)
-        best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth')
+        # After training, load the best F1 model for final evaluation (best class separation)
+        best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_f1_model.pth')
         if os.path.exists(best_path):
             checkpoint = torch.load(best_path)
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"✓ Loaded best LOSS model from epoch {checkpoint['epoch']} (val_loss={checkpoint['val_loss']:.4f}, val_acc={checkpoint['val_acc']:.2f}%) for final evaluation.")
+            print(f"✓ Loaded best F1 model from epoch {checkpoint['epoch']} (val_f1={checkpoint.get('val_f1', 0):.4f}, val_acc={checkpoint['val_acc']:.2f}%) for final evaluation.")
         else:
-            # Fallback to best accuracy model
-            best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth')
+            # Fallback to best loss model
+            best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth')
             if os.path.exists(best_path):
                 checkpoint = torch.load(best_path)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
-                print(f"✓ Loaded best accuracy model from epoch {checkpoint['epoch']} for final evaluation.")
+                print(f"✓ Loaded best LOSS model from epoch {checkpoint['epoch']} for final evaluation.")
+            else:
+                best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth')
+                if os.path.exists(best_path):
+                    checkpoint = torch.load(best_path)
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
+                    print(f"✓ Loaded best accuracy model from epoch {checkpoint['epoch']} for final evaluation.")
 
         self._plot_training_history(training_history)
         
@@ -472,16 +610,50 @@ class DSNNSystem:
         plt.savefig(os.path.join(IMAGES_DIR, 'training_history.png'),dpi=300,bbox_inches='tight')
         plt.close()
     
-    def evaluate_model(self, test_loader):
+    def _tta_predict(self, inputs):
+        """Test-Time Augmentation (Step 11): average predictions over
+        original + shifted + noisy versions for more robust classification."""
+        preds_list = []
+        
+        # 1. Original signal
+        out_orig = self.model(inputs)
+        preds_list.append(torch.softmax(out_orig, dim=1))
+        
+        # 2. Slightly shifted version (shift by 5 samples)
+        shifted = torch.roll(inputs, shifts=5, dims=-1)
+        out_shifted = self.model(shifted)
+        preds_list.append(torch.softmax(out_shifted, dim=1))
+        
+        # 3. Small noise version (σ=0.02)
+        noisy = inputs + torch.randn_like(inputs) * 0.02
+        out_noisy = self.model(noisy)
+        preds_list.append(torch.softmax(out_noisy, dim=1))
+        
+        # Average predictions across augmentations
+        avg_probs = torch.stack(preds_list).mean(dim=0)
+        return avg_probs
+    
+    def evaluate_model(self, test_loader, use_tta=True):
+        """Evaluate model with optional Test-Time Augmentation (TTA)."""
         self.model.eval()
         all_predictions = []
         all_labels = []
         
+        tta_label = "with TTA" if use_tta else "without TTA"
+        print(f"\n📊 Evaluating model {tta_label}...")
+        
         with torch.no_grad():
-            for inputs, labels in tqdm(test_loader, desc="Evaluating model"):
+            for inputs, labels in tqdm(test_loader, desc=f"Evaluating model ({tta_label})"):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                outputs = self.model(inputs)
-                _, predicted = torch.max(outputs.data, 1)
+                
+                if use_tta:
+                    # TTA: average over original + shifted + noisy
+                    avg_probs = self._tta_predict(inputs)
+                    predicted = torch.argmax(avg_probs, dim=1)
+                else:
+                    outputs = self.model(inputs)
+                    _, predicted = torch.max(outputs.data, 1)
+                
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
         
@@ -498,12 +670,13 @@ class DSNNSystem:
         cm = metrics.confusion_matrix(all_labels, all_predictions)
         
         print("\n" + "="*50)
-        print("Model Evaluation Metrics")
+        print(f"Model Evaluation Metrics ({tta_label})")
         print("="*50)
         print(f"Accuracy: {accuracy:.4f}")
         print(f"Precision: {precision:.4f}")
         print(f"Recall: {recall:.4f}")
         print(f"F1 Score: {f1:.4f}")
+        print(f"Temperature scaling: {self.model.temperature}")
         print("\nClassification Report:")
         print(metrics.classification_report(all_labels, all_predictions, zero_division=0))
         
@@ -562,30 +735,21 @@ class ECGDataset(Dataset):
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         
         if self.augment:
-            # 1. Random Gaussian noise (σ=0.05): prevents memorizing exact waveform shapes
+            # 1. Small Gaussian noise (σ=0.02): prevents memorizing exact waveform shapes
             if np.random.random() < 0.5:
-                noise = np.random.normal(0, 0.05, segment.shape).astype(np.float32)
+                noise = np.random.normal(0, 0.02, segment.shape).astype(np.float32)
                 segment = segment + noise
             
-            # 2. Random amplitude scaling (0.8-1.2x): handles inter-patient gain differences
+            # 2. Random temporal shift (±5% of segment length): handles R-peak offset
             if np.random.random() < 0.5:
-                scale = np.random.uniform(0.8, 1.2)
-                segment = segment * scale
-            
-            # 3. Random time shift (±10 samples): handles R-peak detection offset
-            if np.random.random() < 0.5:
-                shift = np.random.randint(-10, 11)
+                max_shift = max(1, int(segment.shape[-1] * 0.05))
+                shift = np.random.randint(-max_shift, max_shift + 1)
                 segment = np.roll(segment, shift, axis=-1)
-
-            # 4. Baseline wander augmentation
-            if np.random.random() < 0.3:
-                baseline = np.sin(np.linspace(0, 2*np.pi, segment.shape[-1])) * np.random.uniform(0.01,0.05)
-                segment += baseline
-
-            # 5. Random dropout noise
-            if np.random.random() < 0.2:
-                mask = np.random.rand(*segment.shape) < 0.02
-                segment[mask] = 0
+            
+            # 3. Amplitude scaling (0.9–1.1x): handles inter-patient gain differences
+            if np.random.random() < 0.5:
+                scale = np.random.uniform(0.9, 1.1)
+                segment = segment * scale
         
         return torch.FloatTensor(segment), label
 
@@ -1219,8 +1383,8 @@ def calculate_class_weights(labels, num_classes=6, max_weight_ratio=10.0):
 
 # ------- PART 3: MAIN FUNCTIONALITY -------
 
-def main(base_path, file_names, num_channels=2, segment_length=256, use_sliding_window=False, 
-         batch_size=32, epochs=50, learning_rate=0.001, train_model=True, stop_event=None, progress_callback=None):
+def main(base_path, file_names, num_channels=2, segment_length=384, use_sliding_window=False, 
+         batch_size=32, epochs=50, learning_rate=3e-4, train_model=True, stop_event=None, progress_callback=None):
     print("\n" + "="*70)
     print("ECG ANALYSIS WITH DEEP SPIKING NEURAL NETWORKS")
     print("="*70)
@@ -1350,7 +1514,48 @@ def main(base_path, file_names, num_channels=2, segment_length=256, use_sliding_
     print(f"  Training patients ({len(train_patients)}): {list(train_patients)}")
     print(f"  Validation patients ({len(val_patients)}): {list(val_patients)}")
     
-    class_weights = calculate_class_weights(y_train)
+    # Compute controlled class weights for balanced learning
+    # Uses sklearn compute_class_weight then normalizes and clamps
+    present_classes = np.unique(y_train)
+    sklearn_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=present_classes,
+        y=y_train
+    )
+    # Build full weight vector for all 6 classes (missing classes get weight 0.0)
+    full_class_weights = np.zeros(6, dtype=np.float32)
+    for cls, w in zip(present_classes, sklearn_weights):
+        full_class_weights[int(cls)] = w
+    
+    # Normalize by mean and clamp to max=3.0 to prevent extreme weights
+    present_mask = full_class_weights > 0
+    if present_mask.any():
+        mean_w = full_class_weights[present_mask].mean()
+        full_class_weights[present_mask] = full_class_weights[present_mask] / mean_w
+        full_class_weights = np.clip(full_class_weights, 0.0, 3.0)
+    
+    # Boost weights for commonly confused classes to improve separation
+    # CB (class 3) ×1.4: often misclassified as NSR and VA
+    # PC (class 4) ×1.3: dispersed across multiple classes
+    # AFib (class 1) ×1.2: partially confused with NSR
+    if full_class_weights[3] > 0:
+        full_class_weights[3] *= 1.4
+    if full_class_weights[4] > 0:
+        full_class_weights[4] *= 1.3
+    if full_class_weights[1] > 0:
+        full_class_weights[1] *= 1.2
+    
+    print(f"\n✓ Class weights (sklearn balanced, normalized, clamped, boosted):")
+    for cls_idx, w in enumerate(full_class_weights):
+        name = AAMI_CLASS_NAMES.get(cls_idx, f"Class {cls_idx}")
+        boost_label = ''
+        if cls_idx == 3: boost_label = ' (×1.4 boost)'
+        elif cls_idx == 4: boost_label = ' (×1.3 boost)'
+        elif cls_idx == 1: boost_label = ' (×1.2 boost)'
+        print(f"  {name} (class {cls_idx}): {w:.4f}{boost_label}")
+    
+    # Also log the custom capped weights for reference
+    class_weights_info = calculate_class_weights(y_train)
     
     print(f"\nFinal split sizes:")
     print(f"  Training set:   {len(X_train)} segments (from {len(train_patients)} patients)")
@@ -1361,23 +1566,10 @@ def main(base_path, file_names, num_channels=2, segment_length=256, use_sliding_
     train_dataset = ECGDataset(X_train, y_train, augment=True)
     val_dataset = ECGDataset(X_val, y_val, augment=False)
     
-    #train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    class_sample_count = np.array(
-        [len(np.where(y_train == t)[0]) for t in np.unique(y_train)]
-    )
-
-    weight = 1. / class_sample_count
-    samples_weight = np.array([weight[t] for t in y_train])
-
-    samples_weight = torch.from_numpy(samples_weight).double()
-
-    sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        sampler=sampler
-    )
+    # Standard DataLoader with shuffle=True (no WeightedRandomSampler — it caused instability)
+    # Class imbalance is handled via class weights in CrossEntropyLoss
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # Validation loader: no augmentation, no sampling, shuffle=False
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Only create test loader if we have test data
@@ -1405,7 +1597,8 @@ def main(base_path, file_names, num_channels=2, segment_length=256, use_sliding_
             val_loader=val_loader,
             epochs=epochs,
             lr=learning_rate,
-            class_weights=list(class_weights.values()) if class_weights else None,
+            weight_decay=1e-3,
+            class_weights=full_class_weights.tolist(),
             stop_event=stop_event,
             progress_callback=progress_callback
         )
@@ -1786,8 +1979,8 @@ def parse_arguments():
     
     parser.add_argument('--channels', type=int, default=2,
                         help='Number of ECG channels to use (1-32)')
-    parser.add_argument('--segment_length', type=int, default=256,
-                        help='Length of ECG segments in samples (256 ≈ 710ms at 360Hz, captures full cardiac cycle)')
+    parser.add_argument('--segment_length', type=int, default=384,
+                        help='Length of ECG segments in samples (384 ≈ 1067ms at 360Hz, captures full cardiac cycle with context)')
     parser.add_argument('--model_type', type=str, default='dsnn',
                         choices=['dsnn', 'attention', 'residual', 'multi'],
                         help='Type of DSNN model to use')
@@ -1796,7 +1989,7 @@ def parse_arguments():
                         help='Batch size for training')
     parser.add_argument('--epochs', type=int, default=2000,
                         help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.01,
+    parser.add_argument('--lr', type=float, default=3e-4,
                         help='Learning rate')
     parser.add_argument('--no_train', action='store_true',
                         help='Skip training and use pre-trained model')

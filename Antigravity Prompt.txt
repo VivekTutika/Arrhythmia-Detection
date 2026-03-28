@@ -1,0 +1,269 @@
+You are operating in **STRICT STEP-BY-STEP MODEL RECOVERY MODE**.
+
+The current DSNN training pipeline is unstable and underperforming (Train Acc ~25%, Val Acc ~17%). Your role is to **apply controlled, minimal, high-impact fixes in isolated batches**, ensuring stability is restored before proceeding further.
+
+---
+
+# 🚨 CORE RULES (NON-NEGOTIABLE)
+
+1. **DO NOT apply all fixes at once**
+2. **ONLY implement ONE STEP per execution**
+3. After each step:
+
+   * STOP immediately
+   * WAIT for user confirmation: `"PROCEED"`
+4. The user will:
+
+   * Train the model
+   * Share updated metrics
+5. Based on results, continue to next step
+
+---
+
+# 🎯 OBJECTIVE
+
+Stabilize training first → then improve accuracy
+
+Target trajectory:
+
+* Step 1–2: Recover learning capacity
+* Step 3–4: Improve generalization
+* Step 5+: Optimize performance
+
+---
+
+# ⚠️ IMPORTANT CONTEXT
+
+Current failure is caused by:
+
+* Over-regularization (too much dropout + smoothing)
+* Invalid class configuration (unused class)
+* Weak learning signal early in training
+* Overcomplicated weighting strategy
+
+We are NOT redesigning the architecture.
+We are restoring **learning capability first**.
+
+---
+
+# 🧩 STEP PLAN
+
+---
+
+## 🔹 STEP 1 — FIX CLASS CONFIGURATION (CRITICAL)
+
+### Problem:
+
+Model uses 6 classes but only 5 are present in data.
+
+### Action:
+
+1. Change:
+   num_classes = 6 → num_classes = 5
+
+2. Remove ALL references to class index 5:
+
+   * AAMI_CLASS_NAMES
+   * Any mappings
+   * Any weight vectors
+   * Any evaluation logic
+
+3. Ensure:
+
+   * Output layer = 5 neurons
+   * Labels range = [0–4]
+
+### Expected Outcome:
+
+* Cleaner gradients
+* Reduced confusion
+* Immediate stability improvement
+
+---
+
+### ⛔ AFTER COMPLETING STEP 1:
+
+STOP.
+
+Ask user:
+"Step 1 complete. Train the model and share results. Type PROCEED to continue."
+
+---
+
+## 🔹 STEP 2 — REDUCE OVER-REGULARIZATION (MAJOR FIX)
+
+### Problem:
+
+Model is over-regularized and cannot learn.
+
+### Action:
+
+Apply the following EXACT changes:
+
+1. Replace ALL:
+   Dropout(0.4) → Dropout(0.2)
+
+2. REMOVE completely:
+   Dropout1d layers (feat_drop1, feat_drop2, feat_drop3)
+
+3. Modify loss:
+   label_smoothing = 0.08 → 0.02
+
+4. Modify optimizer:
+   weight_decay = 1e-3 → 1e-4
+
+DO NOT change anything else.
+
+---
+
+### Expected Outcome:
+
+* Train accuracy should increase significantly
+* Model begins learning real patterns
+
+---
+
+### ⛔ AFTER COMPLETING STEP 2:
+
+STOP.
+
+Ask user:
+"Step 2 complete. Train again and share metrics. Type PROCEED to continue."
+
+---
+
+## 🔹 STEP 3 — FIX LEARNING RATE WARMUP
+
+### Problem:
+
+Warmup is slowing learning too much in early epochs.
+
+### Action:
+
+Replace:
+(epoch / warmup_epochs)
+
+With:
+((epoch + 1) / warmup_epochs)
+
+Ensure:
+
+* LR reaches target properly by end of warmup
+
+---
+
+### Expected Outcome:
+
+* Faster convergence
+* Better early training signal
+
+---
+
+### ⛔ AFTER COMPLETING STEP 3:
+
+STOP.
+
+Ask user:
+"Step 3 complete. Retrain and report results. Type PROCEED to continue."
+
+---
+
+## 🔹 STEP 4 — SIMPLIFY CLASS WEIGHTING
+
+### Problem:
+
+Current class weighting is over-engineered and unstable.
+
+### Action:
+
+1. REMOVE:
+
+   * Manual boosting (×1.4, ×1.3, etc.)
+   * Clipping logic
+   * Custom normalization logic
+
+2. Replace with SIMPLE sklearn-balanced weights:
+
+   weights = compute_class_weight(...)
+   Map directly to full class vector
+
+3. Ensure:
+
+   * Missing classes handled cleanly
+   * No artificial scaling
+
+---
+
+### Expected Outcome:
+
+* Stable gradients
+* Better class separation
+
+---
+
+### ⛔ AFTER COMPLETING STEP 4:
+
+STOP.
+
+Ask user:
+"Step 4 complete. Train and share confusion matrix + accuracy. Type PROCEED to continue."
+
+---
+
+## 🔹 STEP 5 — DATA UTILIZATION FIX (IMPORTANT)
+
+### Problem:
+
+Files without .atr annotations are skipped → data loss
+
+### Action:
+
+Replace skipping logic with fallback:
+
+IF no annotations:
+→ Use sliding window segmentation
+→ Assign placeholder labels OR skip labeling but KEEP segments for unsupervised exposure (if applicable)
+
+Ensure:
+
+* Dataset size increases
+* No silent data loss
+
+---
+
+### Expected Outcome:
+
+* More training data
+* Better generalization
+
+---
+
+### ⛔ AFTER COMPLETING STEP 5:
+
+STOP.
+
+Ask user:
+"Step 5 complete. Train and report improvement. Type PROCEED to continue."
+
+---
+
+# 🚀 FINAL NOTES
+
+* DO NOT introduce new architecture changes
+* DO NOT add new features
+* DO NOT optimize prematurely
+* Focus ONLY on stability + learning recovery
+
+---
+
+# 🧠 SUCCESS CRITERIA
+
+By Step 3–4, expected:
+
+* Train Accuracy: >60%
+* Val Accuracy: >45%
+* Loss decreasing steadily
+
+---
+
+Stay strict. Stay incremental. No shortcuts.
