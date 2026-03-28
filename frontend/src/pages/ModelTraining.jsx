@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { 
-  Activity, 
-  FileText, 
-  Play, 
+import {
+  Activity,
+  FileText,
+  Play,
   Square,
   RefreshCw,
   CheckCircle,
@@ -34,7 +34,7 @@ const ModelTraining = ({ setIsLoading }) => {
     } catch (e) { console.error(e); }
     return 'Dataset/MIT-BIH';
   };
-  
+
   const [datasetPath, setDatasetPath] = useState(getInitialDataPath());
   const [epochs, setEpochs] = useState(50);
   const [expandedImage, setExpandedImage] = useState(null);
@@ -56,7 +56,7 @@ const ModelTraining = ({ setIsLoading }) => {
     try {
       const status = await getTrainingStatus();
       setTrainingStatus(status);
-      
+
       if (status.status === 'running') {
         setTraining(true);
         // Start polling if training is running (e.g., page reload during training)
@@ -75,7 +75,7 @@ const ModelTraining = ({ setIsLoading }) => {
     setConverting(true);
     setConversionResult(null);
     setIsLoading(true);
-    
+
     try {
       const result = await convertMitbih();
       setConversionResult(result);
@@ -94,12 +94,12 @@ const ModelTraining = ({ setIsLoading }) => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
     }
-    
+
     pollIntervalRef.current = setInterval(async () => {
       try {
         const status = await getTrainingStatus();
         setTrainingStatus(status);
-        
+
         if (status.status === 'completed' || status.status === 'stopped' || status.status === 'failed') {
           setTraining(false);
           clearInterval(pollIntervalRef.current);
@@ -108,14 +108,14 @@ const ModelTraining = ({ setIsLoading }) => {
       } catch (error) {
         console.error('Polling error:', error);
       }
-    }, 2000);
+    }, 60000);
   };
 
   const handleStartTraining = async () => {
     setShowStartConfirm(false);
     setTrainingStatus(null);
     setTraining(true);
-    
+
     try {
       const result = await trainModel(datasetPath, epochs);
       console.log('Training started:', result);
@@ -128,7 +128,7 @@ const ModelTraining = ({ setIsLoading }) => {
 
   const handleStopTraining = async () => {
     setShowStopConfirm(false);
-    
+
     try {
       const result = await stopTraining();
       console.log('Stop training result:', result);
@@ -167,7 +167,7 @@ const ModelTraining = ({ setIsLoading }) => {
       {/* Tab Navigation */}
       <div className="tabs-container" style={{ marginBottom: '4px' }}>
         <div className="enhanced-tabs">
-          <button 
+          <button
             className={`enhanced-tab ${activeTab === 'preprocessing' ? 'active' : ''}`}
             onClick={() => setActiveTab('preprocessing')}
           >
@@ -175,7 +175,7 @@ const ModelTraining = ({ setIsLoading }) => {
             <span>Pre-Processing</span>
             <div className="tab-indicator"></div>
           </button>
-          <button 
+          <button
             className={`enhanced-tab ${activeTab === 'training' ? 'active' : ''}`}
             onClick={() => setActiveTab('training')}
           >
@@ -195,21 +195,21 @@ const ModelTraining = ({ setIsLoading }) => {
               <p className="card-subtitle">Convert MIT-BIH dataset files (.hea, .dat, .atr) to EDF and QRS format</p>
             </div>
           </div>
-          
+
           <div>
-            <div style={{ 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
               gap: '16px',
               padding: '32px',
               background: 'var(--background-secondary)',
               borderRadius: '12px'
             }}>
-              <div style={{ 
-                width: '64px', 
-                height: '64px', 
-                borderRadius: '50%', 
+              <div style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
                 background: 'var(--primary-color)',
                 display: 'flex',
                 alignItems: 'center',
@@ -217,7 +217,7 @@ const ModelTraining = ({ setIsLoading }) => {
               }}>
                 <RefreshCw size={32} color="white" />
               </div>
-              
+
               <div className="processing-info">
                 <div className="processing-info-icon">
                   <RefreshCw size={20} color="white" />
@@ -225,13 +225,13 @@ const ModelTraining = ({ setIsLoading }) => {
                 <div className="processing-info-content">
                   <div className="processing-info-title">Estimated Processing Time</div>
                   <div className="processing-info-text">
-                    Conversion typically takes 5-10 minutes depending on the number of files. 
+                    Conversion typically takes 5-10 minutes depending on the number of files.
                     The process runs in the background and you'll be notified upon completion.
                   </div>
                 </div>
               </div>
-              
-              <button 
+
+              <button
                 className="btn btn-primary"
                 onClick={handleConvert}
                 disabled={converting}
@@ -332,12 +332,12 @@ const ModelTraining = ({ setIsLoading }) => {
                 <p className="card-subtitle">Configure and train the Deep Spiking Neural Network for Arrhythmia Detection</p>
               </div>
             </div>
-            
+
             <div style={{ padding: '8px' }}>
               {/* Training Configuration */}
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
                 gap: '24px',
                 marginBottom: '24px'
               }}>
@@ -355,7 +355,7 @@ const ModelTraining = ({ setIsLoading }) => {
                     Path to the folder containing converted EDF and QRS files (run Pre-Processing first)
                   </p>
                 </div>
-                
+
                 <div className="form-group">
                   <label className="form-label">Number of Epochs</label>
                   <input
@@ -403,7 +403,7 @@ const ModelTraining = ({ setIsLoading }) => {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
-                <button 
+                <button
                   className={`btn ${training ? 'btn-danger' : 'btn-primary'}`}
                   onClick={handleTrainClick}
                   disabled={!datasetPath && !training}
@@ -436,16 +436,16 @@ const ModelTraining = ({ setIsLoading }) => {
                       </span>
                     </div>
                     <div className="processing-progress-bar">
-                      <div 
-                        className="processing-progress-fill" 
-                        style={{ 
+                      <div
+                        className="processing-progress-fill"
+                        style={{
                           width: `${trainingStatus.progress || 0}%`,
                           transition: 'width 0.5s ease'
                         }}
                       ></div>
                     </div>
                     <div className="processing-progress-text" style={{ marginTop: '6px' }}>
-                      {trainingStatus.current_epoch > 0 
+                      {trainingStatus.current_epoch > 0
                         ? `Epoch ${trainingStatus.current_epoch}/${trainingStatus.epochs} — Click "Stop Training" to cancel`
                         : 'Loading data and initializing model... This may take a minute.'
                       }
@@ -496,28 +496,28 @@ const ModelTraining = ({ setIsLoading }) => {
                       </div>
                     </div>
                   )}
-                  
+
                   {/* Past Training Info Indicator */}
                   {!training && (
-                    <div style={{ 
-                      marginTop: '12px', 
-                      display: 'flex', 
-                      gap: '16px', 
-                      fontSize: '12px', 
+                    <div style={{
+                      marginTop: '12px',
+                      display: 'flex',
+                      gap: '16px',
+                      fontSize: '12px',
                       color: 'var(--text-secondary)',
                       padding: '0 8px'
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Clock size={14} />
                         Duration: {(() => {
-                           if (!trainingStatus.start_time || !trainingStatus.end_time) return 'N/A';
-                           const start = new Date(trainingStatus.start_time);
-                           const end = new Date(trainingStatus.end_time);
-                           if (isNaN(start.getTime()) || isNaN(end.getTime())) return 'N/A';
-                           const diff = Math.floor((end - start) / 1000);
-                           const mins = Math.floor(diff / 60);
-                           const secs = diff % 60;
-                           return `${mins}m ${secs}s`;
+                          if (!trainingStatus.start_time || !trainingStatus.end_time) return 'N/A';
+                          const start = new Date(trainingStatus.start_time);
+                          const end = new Date(trainingStatus.end_time);
+                          if (isNaN(start.getTime()) || isNaN(end.getTime())) return 'N/A';
+                          const diff = Math.floor((end - start) / 1000);
+                          const mins = Math.floor(diff / 60);
+                          const secs = diff % 60;
+                          return `${mins}m ${secs}s`;
                         })()}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -554,17 +554,17 @@ const ModelTraining = ({ setIsLoading }) => {
                       Training Metrics
                     </h3>
                     <p className="card-subtitle">
-                      {training 
-                        ? `Live metrics — Epoch ${latestEpoch.epoch}` 
+                      {training
+                        ? `Live metrics — Epoch ${latestEpoch.epoch}`
                         : `Final results — ${history.length} epochs completed`}
                     </p>
                   </div>
                 </div>
                 <div style={{ padding: '8px' }}>
                   {/* Summary Cards */}
-                  <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', 
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
                     gap: '12px',
                     marginBottom: '20px'
                   }}>
@@ -600,10 +600,10 @@ const ModelTraining = ({ setIsLoading }) => {
                       <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: 'var(--text-primary)' }}>
                         Final Evaluation on Unseen Test Records
                       </div>
-                      <div style={{ 
-                        display: 'grid', 
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-                        gap: '12px' 
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                        gap: '12px'
                       }}>
                         <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
                           <div style={{ fontSize: '12px', color: '#10b981', fontWeight: 600 }}>OVERALL ACCURACY</div>
@@ -643,11 +643,11 @@ const ModelTraining = ({ setIsLoading }) => {
                             <tr key={h.epoch} style={{ background: idx % 2 === 0 ? 'transparent' : 'var(--background-secondary)' }}>
                               <td style={tdStyle}>{h.epoch}</td>
                               <td style={tdStyle}>{h.train_loss}</td>
-                              <td style={{...tdStyle, color: '#10b981', fontWeight: h.train_acc === bestTrainAcc ? 700 : 400}}>
+                              <td style={{ ...tdStyle, color: '#10b981', fontWeight: h.train_acc === bestTrainAcc ? 700 : 400 }}>
                                 {h.train_acc}%
                               </td>
                               <td style={tdStyle}>{h.val_loss}</td>
-                              <td style={{...tdStyle, color: '#6366f1', fontWeight: h.val_acc === bestValAcc ? 700 : 400}}>
+                              <td style={{ ...tdStyle, color: '#6366f1', fontWeight: h.val_acc === bestValAcc ? 700 : 400 }}>
                                 {h.val_acc}%
                                 {h.val_acc === bestValAcc && <span style={{ marginLeft: 4, fontSize: '11px' }}>⭐</span>}
                               </td>
@@ -675,16 +675,16 @@ const ModelTraining = ({ setIsLoading }) => {
                 </div>
               </div>
               <div style={{ padding: '8px' }}>
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-                  gap: '16px' 
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                  gap: '16px'
                 }}>
                   {trainingStatus.image_files.map((img, idx) => (
-                    <div 
+                    <div
                       key={idx}
-                      style={{ 
-                        background: 'var(--background-secondary)', 
+                      style={{
+                        background: 'var(--background-secondary)',
                         borderRadius: '8px',
                         overflow: 'hidden'
                       }}
@@ -695,17 +695,17 @@ const ModelTraining = ({ setIsLoading }) => {
                         </span>
                       </div>
                       <div style={{ position: 'relative' }}>
-                        <img 
+                        <img
                           src={img}
-                          alt={img.includes('training') ? 'Training History' : 'Confusion Matrix'} 
+                          alt={img.includes('training') ? 'Training History' : 'Confusion Matrix'}
                           style={{ width: '100%', height: 'auto', display: 'block' }}
                         />
                         <button
                           className="btn btn-sm btn-secondary"
                           onClick={() => setExpandedImage(img)}
-                          style={{ 
-                            position: 'absolute', 
-                            top: '8px', 
+                          style={{
+                            position: 'absolute',
+                            top: '8px',
                             right: '8px',
                             background: 'rgba(0,0,0,0.5)',
                             color: 'white'
@@ -724,8 +724,8 @@ const ModelTraining = ({ setIsLoading }) => {
           {/* No Results Yet */}
           {!hasImages() && !training && trainingStatus && trainingStatus.status === 'not_started' && !hasModels() && (
             <div className="card">
-              <div style={{ 
-                padding: '48px 24px', 
+              <div style={{
+                padding: '48px 24px',
                 textAlign: 'center',
                 color: 'var(--text-secondary)'
               }}>
@@ -749,13 +749,13 @@ const ModelTraining = ({ setIsLoading }) => {
               This will train the DSNN model with {epochs} epochs using the dataset at "{datasetPath}".
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button 
+              <button
                 className="btn btn-secondary"
                 onClick={() => setShowStartConfirm(false)}
               >
                 Cancel
               </button>
-              <button 
+              <button
                 className="btn btn-primary"
                 onClick={handleStartTraining}
               >
@@ -776,13 +776,13 @@ const ModelTraining = ({ setIsLoading }) => {
               Stopping training will cancel the current session. No model will be saved.
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button 
+              <button
                 className="btn btn-secondary"
                 onClick={() => setShowStopConfirm(false)}
               >
                 Cancel
               </button>
-              <button 
+              <button
                 className="btn btn-danger"
                 onClick={handleStopTraining}
               >
@@ -795,7 +795,7 @@ const ModelTraining = ({ setIsLoading }) => {
 
       {/* Full Screen Image Modal */}
       {expandedImage && (
-        <div 
+        <div
           style={{
             position: 'fixed',
             top: 0,
@@ -822,13 +822,13 @@ const ModelTraining = ({ setIsLoading }) => {
             <Minimize2 size={18} />
             Close
           </button>
-          <img 
-            src={expandedImage} 
-            alt="Full screen" 
-            style={{ 
-              maxWidth: '90%', 
-              maxHeight: '90%', 
-              objectFit: 'contain' 
+          <img
+            src={expandedImage}
+            alt="Full screen"
+            style={{
+              maxWidth: '90%',
+              maxHeight: '90%',
+              objectFit: 'contain'
             }}
             onClick={(e) => e.stopPropagation()}
           />

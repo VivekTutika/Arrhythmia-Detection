@@ -331,5 +331,596 @@
     ],
     "patient_name": "Sanju",
     "patient_age": "32"
+  },
+  {
+    "id": "12bd7c86-0b11-4b54-b04f-534883624f95",
+    "file_name": "209.edf",
+    "patient_id": "patient_1773507662235_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:31:13.515275",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 86.2,
+      "is_normal": true,
+      "segments_analyzed": 3050,
+      "predictions": {
+        "Normal Sinus Rhythm": 86,
+        "Atrial Fibrillation": 10,
+        "Ventricular Arrhythmia": 2,
+        "Premature Contraction": 1
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 96,
+      "rr_interval": 622,
+      "hrv": 58,
+      "p_wave": 0.144,
+      "qrs_complex": 0.071,
+      "qt_interval": 0.414,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person",
+        "Stimulant (drugs) person"
+      ],
+      "r_peaks": 3052
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "2e0df193-4503-4b43-8a16-89eeeaa1bc98",
+    "file_name": "101.edf",
+    "patient_id": "patient_1773507722043_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:32:02.480729",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 96.3,
+      "is_normal": true,
+      "segments_analyzed": 1872,
+      "predictions": {
+        "Normal Sinus Rhythm": 96,
+        "Atrial Fibrillation": 0,
+        "Ventricular Arrhythmia": 1,
+        "Premature Contraction": 1
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 61,
+      "rr_interval": 977,
+      "hrv": 40,
+      "p_wave": 0.092,
+      "qrs_complex": 0.069,
+      "qt_interval": 0.327,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 1874
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "035977f1-0a7e-46ed-a94c-af2e38db3af1",
+    "file_name": "200.edf",
+    "patient_id": "patient_1773507745947_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:32:26.554700",
+    "result": {
+      "primary_diagnosis": "Ventricular Arrhythmia",
+      "confidence": 53.9,
+      "is_normal": false,
+      "segments_analyzed": 2791,
+      "predictions": {
+        "Normal Sinus Rhythm": 18,
+        "Atrial Fibrillation": 17,
+        "Ventricular Arrhythmia": 53,
+        "Conduction Block": 3,
+        "Premature Contraction": 7
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 91,
+      "rr_interval": 652,
+      "hrv": 43,
+      "p_wave": 0.107,
+      "qrs_complex": 0.069,
+      "qt_interval": 0.398,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person",
+        "Stimulant (drugs) person"
+      ],
+      "r_peaks": 2792
+    },
+    "recommendations": [
+      "Critical: Seek immediate emergency medical attention or a rapid cardiology consultation.",
+      "Strictly avoid strenuous physical activities or high-intensity exercise until formally cleared.",
+      "Discuss the potential need for continuous Holter monitoring or an implantable cardioverter-defibrillator (ICD).",
+      "Ensure any prescribed antiarrhythmic medications are taken exactly as directed.",
+      "Evaluate for any underlying structural heart disease or electrolyte imbalances with your healthcare provider."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "40c04c18-313e-4153-9ef0-51a8825c73f8",
+    "file_name": "207.edf",
+    "patient_id": "patient_1773507862235_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:34:22.722708",
+    "result": {
+      "primary_diagnosis": "Ventricular Arrhythmia",
+      "confidence": 95.7,
+      "is_normal": false,
+      "segments_analyzed": 2383,
+      "predictions": {
+        "Atrial Fibrillation": 0,
+        "Ventricular Arrhythmia": 95,
+        "Conduction Block": 3,
+        "Premature Contraction": 0
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 66,
+      "rr_interval": 895,
+      "hrv": 72,
+      "p_wave": 0.158,
+      "qrs_complex": 0.11,
+      "qt_interval": 0.345,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 2385
+    },
+    "recommendations": [
+      "Critical: Seek immediate emergency medical attention or a rapid cardiology consultation.",
+      "Strictly avoid strenuous physical activities or high-intensity exercise until formally cleared.",
+      "Discuss the potential need for continuous Holter monitoring or an implantable cardioverter-defibrillator (ICD).",
+      "Ensure any prescribed antiarrhythmic medications are taken exactly as directed.",
+      "Evaluate for any underlying structural heart disease or electrolyte imbalances with your healthcare provider."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "257aeea2-9b84-4717-b311-eb8d716beb79",
+    "file_name": "213.edf",
+    "patient_id": "patient_1773507906538_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:35:07.127607",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 61.8,
+      "is_normal": true,
+      "segments_analyzed": 3292,
+      "predictions": {
+        "Normal Sinus Rhythm": 61,
+        "Atrial Fibrillation": 2,
+        "Ventricular Arrhythmia": 8,
+        "Conduction Block": 4,
+        "Premature Contraction": 22
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 108,
+      "rr_interval": 552,
+      "hrv": 79,
+      "p_wave": 0.095,
+      "qrs_complex": 0.078,
+      "qt_interval": 0.383,
+      "hr_categories": [
+        "Fully Anxiety person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person",
+        "Stimulant (drugs) person",
+        "Dehydrated person"
+      ],
+      "r_peaks": 3294
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "d05936a3-0cc5-42bf-b3ad-29c4a97122b9",
+    "file_name": "217.edf",
+    "patient_id": "patient_1773507943715_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:35:44.161713",
+    "result": {
+      "primary_diagnosis": "Premature Contraction",
+      "confidence": 78.6,
+      "is_normal": false,
+      "segments_analyzed": 2279,
+      "predictions": {
+        "Normal Sinus Rhythm": 3,
+        "Atrial Fibrillation": 0,
+        "Ventricular Arrhythmia": 17,
+        "Conduction Block": 0,
+        "Premature Contraction": 78
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 72,
+      "rr_interval": 830,
+      "hrv": 63,
+      "p_wave": 0.082,
+      "qrs_complex": 0.091,
+      "qt_interval": 0.368,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Low BP person"
+      ],
+      "r_peaks": 2280
+    },
+    "recommendations": [
+      "Significantly reduce intake of known triggers such as heavy caffeine, tobacco, and high-sugar energy drinks.",
+      "Implement stress management techniques and ensure adequate rest cycles/sleep hygiene.",
+      "Maintain proper hydration and ensure electrolyte stability (especially potassium and magnesium).",
+      "Follow up with a cardiologist if the episodes become highly frequent or cause noticeable discomfort.",
+      "Consider a short-term ambulatory ECG patch to quantify the baseline burden of the extra beats."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "00aef9e9-a6f8-4fa8-bca3-6533df884346",
+    "file_name": "222.edf",
+    "patient_id": "patient_1773507976091_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:36:16.612458",
+    "result": {
+      "primary_diagnosis": "Inconclusive (Low Confidence)",
+      "confidence": 40.7,
+      "is_normal": false,
+      "segments_analyzed": 2632,
+      "predictions": {
+        "Normal Sinus Rhythm": 40,
+        "Atrial Fibrillation": 23,
+        "Ventricular Arrhythmia": 5,
+        "Conduction Block": 0,
+        "Premature Contraction": 30
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 80,
+      "rr_interval": 744,
+      "hrv": 47,
+      "p_wave": 0.158,
+      "qrs_complex": 0.074,
+      "qt_interval": 0.331,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person"
+      ],
+      "r_peaks": 2634
+    },
+    "recommendations": [
+      "The neural network could not determine a definitive classification pattern. A manual review is required.",
+      "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+      "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+      "Avoid making clinical decisions purely based on this low-confidence inference."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "cb247a93-aaf6-440c-88f5-58d2ae433381",
+    "file_name": "228.edf",
+    "patient_id": "patient_1773507997322_0",
+    "status": "completed",
+    "created_at": "2026-03-14T22:36:37.773687",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 61.7,
+      "is_normal": true,
+      "segments_analyzed": 2139,
+      "predictions": {
+        "Normal Sinus Rhythm": 61,
+        "Atrial Fibrillation": 11,
+        "Ventricular Arrhythmia": 21,
+        "Conduction Block": 1,
+        "Premature Contraction": 4
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 69,
+      "rr_interval": 863,
+      "hrv": 70,
+      "p_wave": 0.111,
+      "qrs_complex": 0.119,
+      "qt_interval": 0.376,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 2141
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "23"
+  },
+  {
+    "id": "b041aadb-f099-4d94-8f44-093740dca587",
+    "file_name": "101.edf",
+    "patient_id": "patient_1774097333806_0",
+    "status": "completed",
+    "created_at": "2026-03-21T18:19:04.874549",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 97.0,
+      "is_normal": true,
+      "segments_analyzed": 1872,
+      "predictions": {
+        "Normal Sinus Rhythm": 96,
+        "Atrial Fibrillation": 2,
+        "Ventricular Arrhythmia": 0,
+        "Conduction Block": 0,
+        "Premature Contraction": 0
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 61,
+      "rr_interval": 977,
+      "hrv": 58,
+      "p_wave": 0.144,
+      "qrs_complex": 0.071,
+      "qt_interval": 0.414,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 1874
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "25"
+  },
+  {
+    "id": "54bcc6e0-c0f4-4f4c-bbdc-3ee4b6343b1e",
+    "file_name": "200.edf",
+    "patient_id": "patient_1774097410918_0",
+    "status": "completed",
+    "created_at": "2026-03-21T18:20:11.543952",
+    "result": {
+      "primary_diagnosis": "Inconclusive (Low Confidence)",
+      "confidence": 43.5,
+      "is_normal": false,
+      "segments_analyzed": 2791,
+      "predictions": {
+        "Normal Sinus Rhythm": 29,
+        "Atrial Fibrillation": 16,
+        "Ventricular Arrhythmia": 43,
+        "Conduction Block": 8,
+        "Premature Contraction": 2
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 91,
+      "rr_interval": 652,
+      "hrv": 40,
+      "p_wave": 0.092,
+      "qrs_complex": 0.069,
+      "qt_interval": 0.327,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person",
+        "Stimulant (drugs) person"
+      ],
+      "r_peaks": 2792
+    },
+    "recommendations": [
+      "The neural network could not determine a definitive classification pattern. A manual review is required.",
+      "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+      "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+      "Avoid making clinical decisions purely based on this low-confidence inference."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "25"
+  },
+  {
+    "id": "59a632dc-52b0-406a-887a-45aa206651d9",
+    "file_name": "207.edf",
+    "patient_id": "patient_1774097444798_0",
+    "status": "completed",
+    "created_at": "2026-03-21T18:20:45.426651",
+    "result": {
+      "primary_diagnosis": "Ventricular Arrhythmia",
+      "confidence": 49.4,
+      "is_normal": false,
+      "segments_analyzed": 2383,
+      "predictions": {
+        "Normal Sinus Rhythm": 0,
+        "Ventricular Arrhythmia": 49,
+        "Conduction Block": 3,
+        "Premature Contraction": 47
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 66,
+      "rr_interval": 895,
+      "hrv": 43,
+      "p_wave": 0.107,
+      "qrs_complex": 0.069,
+      "qt_interval": 0.398,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 2385
+    },
+    "recommendations": [
+      "Critical: Seek immediate emergency medical attention or a rapid cardiology consultation.",
+      "Strictly avoid strenuous physical activities or high-intensity exercise until formally cleared.",
+      "Discuss the potential need for continuous Holter monitoring or an implantable cardioverter-defibrillator (ICD).",
+      "Ensure any prescribed antiarrhythmic medications are taken exactly as directed.",
+      "Evaluate for any underlying structural heart disease or electrolyte imbalances with your healthcare provider."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "25"
+  },
+  {
+    "id": "003b2c22-cc7a-405e-b250-9cef8233f7b5",
+    "file_name": "101.edf",
+    "patient_id": "patient_1774245790656_0",
+    "status": "completed",
+    "created_at": "2026-03-23T11:33:11.231449",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 99.8,
+      "is_normal": true,
+      "segments_analyzed": 1872,
+      "predictions": {
+        "Normal Sinus Rhythm": 99,
+        "Ventricular Arrhythmia": 0,
+        "Conduction Block": 0
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 61,
+      "rr_interval": 977,
+      "hrv": 26,
+      "p_wave": 0.112,
+      "qrs_complex": 0.108,
+      "qt_interval": 0.383,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 1874
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "26"
+  },
+  {
+    "id": "bd2f4557-de8c-47f5-a750-cdf7fb1cd124",
+    "file_name": "200.edf",
+    "patient_id": "patient_1774245791250_1",
+    "status": "completed",
+    "created_at": "2026-03-23T11:33:11.919232",
+    "result": {
+      "primary_diagnosis": "Inconclusive (Low Confidence)",
+      "confidence": 57.5,
+      "is_normal": false,
+      "segments_analyzed": 2791,
+      "predictions": {
+        "Normal Sinus Rhythm": 57,
+        "Atrial Fibrillation": 2,
+        "Ventricular Arrhythmia": 28,
+        "Conduction Block": 8,
+        "Premature Contraction": 3
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 91,
+      "rr_interval": 652,
+      "hrv": 44,
+      "p_wave": 0.124,
+      "qrs_complex": 0.084,
+      "qt_interval": 0.377,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person",
+        "Stimulant (drugs) person"
+      ],
+      "r_peaks": 2792
+    },
+    "recommendations": [
+      "The neural network could not determine a definitive classification pattern. A manual review is required.",
+      "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+      "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+      "Avoid making clinical decisions purely based on this low-confidence inference."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "26"
+  },
+  {
+    "id": "b43c3b8b-614d-49e7-9f1f-9f4fd9a2ccf0",
+    "file_name": "207.edf",
+    "patient_id": "patient_1774245791938_2",
+    "status": "completed",
+    "created_at": "2026-03-23T11:33:12.525375",
+    "result": {
+      "primary_diagnosis": "Inconclusive (Low Confidence)",
+      "confidence": 61.6,
+      "is_normal": false,
+      "segments_analyzed": 2383,
+      "predictions": {
+        "Normal Sinus Rhythm": 7,
+        "Atrial Fibrillation": 0,
+        "Ventricular Arrhythmia": 61,
+        "Conduction Block": 5,
+        "Premature Contraction": 25
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 66,
+      "rr_interval": 895,
+      "hrv": 36,
+      "p_wave": 0.109,
+      "qrs_complex": 0.082,
+      "qt_interval": 0.398,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "Fully Depressed person",
+        "Low BP person"
+      ],
+      "r_peaks": 2385
+    },
+    "recommendations": [
+      "The neural network could not determine a definitive classification pattern. A manual review is required.",
+      "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+      "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+      "Avoid making clinical decisions purely based on this low-confidence inference."
+    ],
+    "patient_name": "ramesh",
+    "patient_age": "26"
   }
 ]
