@@ -685,6 +685,63 @@ def clear_all_results():
 
 # ------- MODEL TRAINING AND DATA CONVERSION ENDPOINTS -------
 
+@api_bp.route('/ecg-visualize', methods=['POST'])
+def ecg_visualize():
+    """Endpoint for ECG reader tab"""
+    from services.ecg_reader import generate_ecg_image
+    
+    try:
+        if request.is_json:
+            data = request.get_json()
+            mode = data.get('mode')
+            duration = float(data.get('duration', 10))
+            record_name = data.get('record_name')
+            
+            if mode == 'dataset':
+                result = generate_ecg_image(mode='dataset', record_name=record_name, duration=duration)
+                if result.get('status') == 'success':
+                    return jsonify({'status': 'success', 'image_url': result['image_path']})
+                else:
+                    return jsonify(result), 500
+            else:
+                return jsonify({'error': 'Invalid mode for JSON request'}), 400
+                
+        else:
+            mode = request.form.get('mode', 'upload')
+            duration = float(request.form.get('duration', 10))
+            
+            if mode == 'upload':
+                if 'edf_file' not in request.files:
+                    return jsonify({'error': 'No edf_file provided'}), 400
+                    
+                edf_file = request.files['edf_file']
+                qrs_file = request.files.get('qrs_file')
+                
+                # Save temporarily
+                uploads_dir = current_app.config['UPLOAD_FOLDER']
+                import werkzeug.utils
+                edf_path = os.path.join(uploads_dir, werkzeug.utils.secure_filename(edf_file.filename))
+                edf_file.save(edf_path)
+                
+                qrs_path = None
+                if qrs_file and qrs_file.filename:
+                    qrs_path = os.path.join(uploads_dir, werkzeug.utils.secure_filename(qrs_file.filename))
+                    qrs_file.save(qrs_path)
+                    
+                result = generate_ecg_image(mode='upload', edf_file=edf_path, qrs_file=qrs_path, duration=duration)
+                
+                if result.get('status') == 'success':
+                    return jsonify({'status': 'success', 'image_url': result['image_path']})
+                else:
+                    return jsonify(result), 500
+            else:
+                return jsonify({'error': 'Invalid mode for form request'}), 400
+                
+    except Exception as e:
+        logger.error(f"Error in ecg-visualize: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @api_bp.route('/convert-mitbih', methods=['POST'])
 def convert_mitbih():
     """

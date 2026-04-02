@@ -25,7 +25,10 @@ app.config['RESULTS_FOLDER'] = os.path.join(os.path.dirname(__file__), 'results'
 app.config['IMAGES_FOLDER'] = os.path.join(os.path.dirname(__file__), 'images')
 
 # Enable CORS
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/api/*": {"origins": "*"},
+    r"/images/*": {"origins": "*"}
+})
 
 # Create necessary directories
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -60,10 +63,14 @@ def health_check():
     })
 
 # Route to serve training images
-@app.route('/images/<filename>')
+@app.route('/images/<path:filename>')
 def serve_image(filename):
     """Serve training visualization images"""
-    return send_from_directory(app.config['IMAGES_FOLDER'], filename)
+    from flask import send_from_directory, request
+    response = send_from_directory(app.config['IMAGES_FOLDER'], filename)
+    if request.args.get('download'):
+        response.headers['Content-Disposition'] = f'attachment; filename={filename.split("/")[-1]}'
+    return response
 
 if __name__ == '__main__':
     logger.info("Starting Arrhythmia Detection Web Application...")

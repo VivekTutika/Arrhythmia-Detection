@@ -14,9 +14,12 @@ import {
   BarChart3,
   Database,
   Clock,
-  Calendar
+  Calendar,
+  Image as ImageIcon,
+  Download,
+  UploadCloud
 } from 'lucide-react';
-import { convertMitbih, trainModel, getTrainingStatus, stopTraining } from '../services/api';
+import { convertMitbih, trainModel, getTrainingStatus, stopTraining, getECGVisualization } from '../services/api';
 
 const ModelTraining = ({ setIsLoading }) => {
   const [activeTab, setActiveTab] = useState('training');
@@ -41,6 +44,37 @@ const ModelTraining = ({ setIsLoading }) => {
   const [showStartConfirm, setShowStartConfirm] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const pollIntervalRef = useRef(null);
+
+  // --- New ECG Reader State ---
+  const [ecgMode, setEcgMode] = useState('dataset');
+  const [ecgRecord, setEcgRecord] = useState('100');
+  const [ecgDuration, setEcgDuration] = useState(10);
+  const [ecgEdfFile, setEcgEdfFile] = useState(null);
+  const [ecgQrsFile, setEcgQrsFile] = useState(null);
+  const [isRenderingEcg, setIsRenderingEcg] = useState(false);
+  const [ecgImageUrl, setEcgImageUrl] = useState(null);
+  const [ecgError, setEcgError] = useState(null);
+
+  const handleGenerateECG = async () => {
+    setIsRenderingEcg(true);
+    setEcgError(null);
+    setEcgImageUrl(null);
+    try {
+      const data = ecgMode === 'dataset' 
+        ? { record_name: ecgRecord, duration: ecgDuration }
+        : { edfFile: ecgEdfFile, qrsFile: ecgQrsFile, duration: ecgDuration };
+        
+      const result = await getECGVisualization(ecgMode, data);
+      if (result.status === 'success' && result.image_url) {
+        setEcgImageUrl(import.meta.env.DEV ? `http://localhost:5000${result.image_url}` : result.image_url);
+      }
+    } catch (error) {
+      console.error(error);
+      setEcgError(error.response?.data?.message || error.response?.data?.error || error.message || 'Error generating ECG');
+    } finally {
+      setIsRenderingEcg(false);
+    }
+  };
 
   useEffect(() => {
     setIsLoading(false);
@@ -181,6 +215,14 @@ const ModelTraining = ({ setIsLoading }) => {
           >
             <Activity size={18} />
             <span>Model Training</span>
+            <div className="tab-indicator"></div>
+          </button>
+          <button 
+            className={`enhanced-tab ${activeTab === 'ecg-reader' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ecg-reader')}
+          >
+            <ImageIcon size={18} />
+            <span>ECG Reader</span>
             <div className="tab-indicator"></div>
           </button>
         </div>
@@ -736,6 +778,271 @@ const ModelTraining = ({ setIsLoading }) => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ECG Reader Tab */}
+      {activeTab === 'ecg-reader' && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">ECG Reader</h3>
+              <p className="card-subtitle">Visualize ECG signals with R-peaks from dataset or local uploads</p>
+            </div>
+          </div>
+          
+          <div style={{ padding: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', marginBottom: '24px' }}>
+              
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label className="form-label">Mode</label>
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <label style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    cursor: 'pointer',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: ecgMode === 'dataset' ? '2px solid var(--primary-color)' : '2px solid transparent',
+                    background: ecgMode === 'dataset' ? 'rgba(99, 102, 241, 0.1)' : 'var(--background-secondary)',
+                    color: ecgMode === 'dataset' ? 'var(--primary-color)' : 'var(--text-secondary)',
+                    fontWeight: ecgMode === 'dataset' ? '600' : '500',
+                    transition: 'all 0.2s',
+                    boxShadow: ecgMode === 'dataset' ? '0 0 0 1px var(--primary-color)' : '0 0 0 1px var(--border-color)'
+                  }}>
+                    <input 
+                      type="radio" 
+                      name="ecgMode" 
+                      value="dataset" 
+                      checked={ecgMode === 'dataset'} 
+                      onChange={() => setEcgMode('dataset')} 
+                      style={{ display: 'none' }}
+                    />
+                    <Database size={20} />
+                    Dataset Mode
+                  </label>
+                  <label style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    cursor: 'pointer',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: ecgMode === 'upload' ? '2px solid var(--primary-color)' : '2px solid transparent',
+                    background: ecgMode === 'upload' ? 'rgba(99, 102, 241, 0.1)' : 'var(--background-secondary)',
+                    color: ecgMode === 'upload' ? 'var(--primary-color)' : 'var(--text-secondary)',
+                    fontWeight: ecgMode === 'upload' ? '600' : '500',
+                    transition: 'all 0.2s',
+                    boxShadow: ecgMode === 'upload' ? '0 0 0 1px var(--primary-color)' : '0 0 0 1px var(--border-color)'
+                  }}>
+                    <input 
+                      type="radio" 
+                      name="ecgMode" 
+                      value="upload" 
+                      checked={ecgMode === 'upload'} 
+                      onChange={() => setEcgMode('upload')} 
+                      style={{ display: 'none' }}
+                    />
+                    <UploadCloud size={20} />
+                    Upload Mode
+                  </label>
+                </div>
+              </div>
+
+              {ecgMode === 'dataset' ? (
+                <div className="form-group">
+                  <label className="form-label">MIT-BIH Record</label>
+                  <select 
+                    className="form-input" 
+                    value={ecgRecord} 
+                    onChange={(e) => setEcgRecord(e.target.value)}
+                  >
+                    {['100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '111', '112', '113', '114', '115', '116', '117', '118', '119', '121', '122', '123', '124', '200', '201', '202', '203', '205', '207', '208', '209', '210', '212', '213', '214', '215', '217', '219', '220', '221', '222', '223', '228', '230', '231', '232', '233', '234'].map(rec => (
+                      <option key={rec} value={rec}>{rec}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                  <label className="form-label">Upload Files</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                    
+                    {/* EDF File Upload */}
+                    <div 
+                      className={`upload-area ${ecgEdfFile ? 'has-file' : ''}`}
+                      style={{ 
+                        padding: '24px 16px', 
+                        minHeight: '120px', 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        gap: '12px', 
+                        border: ecgEdfFile ? '2px dashed var(--primary-color)' : '2px dashed var(--border-color)',
+                        background: ecgEdfFile ? 'rgba(99, 102, 241, 0.05)' : 'var(--background-secondary)',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onClick={() => document.getElementById('ecg-edf-input').click()}
+                    >
+                      <input 
+                        type="file" 
+                        id="ecg-edf-input"
+                        accept=".edf" 
+                        style={{ display: 'none' }}
+                        onChange={(e) => setEcgEdfFile(e.target.files[0])} 
+                      />
+                      <UploadCloud size={32} style={{ color: ecgEdfFile ? 'var(--primary-color)' : 'var(--text-secondary)' }} />
+                      <div style={{ textAlign: 'center' }}>
+                        <span style={{ display: 'block', fontWeight: '500', color: ecgEdfFile ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                          {ecgEdfFile ? ecgEdfFile.name : 'Select EDF File'}
+                        </span>
+                        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>(Required)</span>
+                      </div>
+                    </div>
+
+                    {/* QRS File Upload */}
+                    <div 
+                      className={`upload-area ${ecgQrsFile ? 'has-file' : ''}`}
+                      style={{ 
+                        padding: '24px 16px', 
+                        minHeight: '120px', 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        gap: '12px', 
+                        border: ecgQrsFile ? '2px dashed var(--primary-color)' : '2px dashed var(--border-color)',
+                        background: ecgQrsFile ? 'rgba(99, 102, 241, 0.05)' : 'var(--background-secondary)',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onClick={() => document.getElementById('ecg-qrs-input').click()}
+                    >
+                      <input 
+                        type="file" 
+                        id="ecg-qrs-input"
+                        accept=".qrs" 
+                        style={{ display: 'none' }}
+                        onChange={(e) => setEcgQrsFile(e.target.files[0])} 
+                      />
+                      <UploadCloud size={32} style={{ color: ecgQrsFile ? 'var(--primary-color)' : 'var(--text-secondary)' }} />
+                      <div style={{ textAlign: 'center' }}>
+                        <span style={{ display: 'block', fontWeight: '500', color: ecgQrsFile ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                          {ecgQrsFile ? ecgQrsFile.name : 'Select QRS File'}
+                        </span>
+                        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>(Optional)</span>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              )}
+
+              <div className="form-group">
+                <label className="form-label">Duration (seconds)</label>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                  <input 
+                    type="number" 
+                    className="form-input" 
+                    value={ecgDuration} 
+                    onChange={(e) => setEcgDuration(parseInt(e.target.value) || 10)} 
+                    min="1" 
+                    max="60" 
+                    style={{ flex: 1 }}
+                  />
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => {
+                      setEcgMode('dataset');
+                      setEcgRecord('100');
+                      setEcgDuration(10);
+                      setEcgEdfFile(null);
+                      setEcgQrsFile(null);
+                      setEcgImageUrl(null);
+                      setEcgError(null);
+                    }}
+                    title="Clear Form"
+                    disabled={isRenderingEcg}
+                    style={{ height: '42px', width: '42px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, borderRadius: '8px' }}
+                  >
+                    <RefreshCw size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleGenerateECG} 
+                disabled={isRenderingEcg || (ecgMode === 'upload' && !ecgEdfFile)}
+                style={{ minWidth: '200px' }}
+              >
+                {isRenderingEcg ? (
+                  <>
+                    <RefreshCw size={18} className="spin" />
+                    Rendering ECG...
+                  </>
+                ) : (
+                  <>
+                    <ImageIcon size={18} />
+                    Generate ECG
+                  </>
+                )}
+              </button>
+            </div>
+
+            {ecgError && (
+               <div className="status-banner status-error" style={{ marginBottom: '24px' }}>
+                 <XCircle size={24} style={{ color: '#ef4444', flexShrink: 0 }} />
+                 <div>
+                   <h4 style={{ margin: '0 0 8px 0', color: '#ef4444' }}>Error Generating ECG</h4>
+                   <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+                     {ecgError}
+                   </p>
+                 </div>
+               </div>
+            )}
+
+            {ecgImageUrl && (
+              <div style={{ background: 'var(--background-secondary)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h4 style={{ margin: 0 }}>Generated Visualization</h4>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <a 
+                      href={`${ecgImageUrl}?download=1`}
+                      className="btn btn-sm btn-secondary"
+                      download={`ecg_${ecgMode === 'dataset' ? ecgRecord : 'uploaded'}.png`}
+                    >
+                      <Download size={14} /> Download
+                    </a>
+                    <button 
+                      className="btn btn-sm btn-secondary" 
+                      onClick={() => setExpandedImage(ecgImageUrl)}
+                    >
+                      <Maximize2 size={14} /> Full Screen
+                    </button>
+                  </div>
+                </div>
+                <div style={{ background: 'white', borderRadius: '8px', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
+                  <img 
+                    src={ecgImageUrl} 
+                    alt="ECG Signal" 
+                    style={{ maxWidth: '100%', height: 'auto', display: 'block', cursor: 'pointer' }}
+                    onClick={() => setExpandedImage(ecgImageUrl)}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

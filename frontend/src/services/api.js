@@ -117,4 +117,25 @@ export const stopTraining = async () => {
   return response.data;
 };
 
+// Get ECG Visualization
+export const getECGVisualization = async (mode, data) => {
+  if (mode === 'dataset') {
+    const response = await apiClient.post('/api/ecg-visualize', { mode, ...data });
+    return response.data;
+  } else if (mode === 'upload') {
+    const formData = new FormData();
+    formData.append('mode', 'upload');
+    formData.append('edf_file', data.edfFile);
+    if (data.qrsFile) {
+      formData.append('qrs_file', data.qrsFile);
+    }
+    formData.append('duration', data.duration || 10);
+    
+    const response = await apiClient.post('/api/ecg-visualize', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+};
+
 export default apiClient;
