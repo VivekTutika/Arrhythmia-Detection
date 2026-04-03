@@ -1,104 +1,140 @@
 # Arrhythmia Detection Web Application 🫀
 
-**Early Detection of Arrhythmia using Deep Spiking Neural Network (DSNN)**
+**A comprehensive full-stack medical AI solution for the early detection and classification of cardiac arrhythmias using a Deep Spiking Neural Network (DSNN).**
 
-This application is a full-stack medical AI solution for classifying cardiac arrhythmias from ECG recordings. It features a robust deep learning pipeline, real-time training visualization, and a clinical-grade analysis dashboard.
+This application aims to provide clinical-grade analysis of ECG recordings by leveraging a robust deep learning pipeline while ensuring high confidence and detailed breakdown of cardiac conditions. It features real-time model training visualization, an interactive clinical dashboard, and a seamless ECG reader integration.
 
 ---
 
-## 📂 Project Structure
+## 🚀 Project Understanding & Features
+
+This project was developed to bridge the gap between advanced deep learning techniques in bio-signal processing and an accessible, user-friendly clinical interface.
+
+### Key Features
+- **ECG Reader & Uploads**: Flexible mode selection for file uploads (`.dat`/`.hea`, `.edf`, or `.csv`), complete with robust background processing.
+- **Dynamic Visualization & Downloads**: Real-time rendering of ECG signals via interactive visualizations. Generated charts utilize image caching for optimized performance and are programmatically downloadable for clinical records.
+- **Deep Learning Pipeline**: Powered by a Deep Spiking Neural Network (DSNN) built in PyTorch. The model takes advantage of temporal signal dynamics and utilizes focal loss to handle class imbalances seamlessly.
+- **Live Training Dashboard**: Real-time progress broadcasts via status polling to the frontend. Live loss and accuracy curves allow researchers and clinicians to monitor model performance dynamically.
+- **Historical Analysis**: Maintain a history of uploaded datasets and generated prediction reports for future comparison.
+- **Configurable Settings**: A dedicated settings panel allows users to configure confidence thresholds; results dropping below these logic checks are safely flagged as **Inconclusive**.
+
+---
+
+## 🧠 Core Implementation & Architecture
+
+The application implements a strict 3-stage clinical pipeline converting raw signals to intelligent insights.
+
+### 1. Data Processing
+- **Source Selection**: Built around the gold-standard MIT-BIH Arrhythmia Database.
+- **Conversion Phase**: Raw data (`.dat` and `.hea` files) is converted into interoperable formats like EDF (European Data Format).
+- **Signal Filtering**: Applies a **0.5Hz - 40Hz Butterworth Bandpass Filter** to mitigate baseline wander and limit powerline interference noise.
+- **Normalization**: Z-Score normalization per-segment allows robust morphological feature extraction over amplitude thresholds.
+
+### 2. DSNN Architecture & Training
+- Realized as a Deep Convolutional SNN specifically structured for sequential temporal parsing.
+- Employs **Peak-Triggered Segmentation**, centering focus cleanly along the R-Peak utilizing `.qrs` annotations.
+- Addresses the rareness of life-threatening arrhythmias (e.g., Ventricular Arrhythmias, AFib) over regular sinus rhythms via statistically balanced subset iterations and focal loss.
+
+### 3. Inference & Diagnostics
+- Outputs predictions sorted among 6 main classifications:
+  1. Normal Sinus Rhythm
+  2. Atrial Fibrillation (AFib)
+  3. Ventricular Arrhythmia
+  4. Conduction Block
+  5. Premature Contraction
+  6. ST Segment Abnormality
+- Delivers a primary diagnosis with an associated **confidence score**. Detailed segments map specific regions contributing to the classification.
+
+---
+
+## 📂 Folder Structure
 
 ```text
 Arrhythmia-Detection/
-├── backend/                   # Flask REST API & ML Services
-│   ├── models/                # Trained PyTorch models (.pth)
-│   ├── routes/                # API Endpoints (api.py, web.py)
-│   ├── services/              # Core Logic
-│   │   ├── train_dsnn.py      # DSNN Architecture & Training Pipeline
-│   │   └── converter.py       # MIT-BIH to EDF/QRS Conversion
+├── backend/                   # Python / Flask REST API & ML Services
+│   ├── app.py                 # Core app entry point
+│   ├── routes/                # Endpoints (api.py, web.py)
+│   ├── services/              # Core logic & ML Pipelines (train_dsnn.py, converter.py)
+│   ├── models/                # Checkpoints & serialized PyTorch models (.pth)
 │   ├── results/               # Persisted Analysis Reports (JSON)
-│   ├── images/                # Generated Training Visualizations (Plots)
-│   └── app.py                 # Flask Entry Point
-├── frontend/                  # React + Vite Frontend
+│   ├── uploads/               # Temporary parsing directory for incoming ECG readings
+│   └── images/                # Cached & programmatic generated Training Visualizations
+├── frontend/                  # React + Vite Frontend UI
 │   ├── src/
-│   │   ├── components/        # Reusable UI (Charts, Modals, Layouts)
-│   │   ├── pages/             # Dashboard, Training, Analysis, Settings
-│   │   └── App.jsx            # Routing & Global State
-│   └── vite.config.js
-└── Dataset/                   # ECG Data Repository
-    ├── MIT-BIH/               # 40 Gold-Standard training records (.edf, .qrs)
-    └── test/                  # 8 Unseen evaluation records
+│   │   ├── pages/             # Main Views (Dashboard, ModelTraining, Upload, Results)
+│   │   ├── components/        # Isolated UI pieces (Sidebar, Header, Interactive Charts)
+│   │   ├── App.jsx            # Routing Rules & Theme Provider Context
+│   │   └── App.css            # Scoped layout styling and transitions
+│   └── vite.config.js         # Build tooling config
+└── Dataset/                   # Persistent ECG Data Repository
+    ├── MIT-BIH/               # Benchmark training records (.edf, .qrs)
+    └── test/                  # Test set mappings for independent inference
 ```
 
 ---
 
-## ⚙️ Core Implementation Pipeline
+## 🛠️ Tech Stack & Prerequisites
 
-The application follows a rigorous 3-stage pipeline to transform raw ECG data into clinical insights.
+### Application Layers
+- **Frontend**: React.js, Vite, React-Router-DOM, Recharts (Visualizations), Axios (Data fetching), Lucide React (Icons).
+- **Backend**: Flask (API Routing), PyTorch (SNN Definition/Training), WFDB (Bio-signal Parsing), SciPy/NumPy.
 
-### 1. Data Conversion & Pre-processing
-- **Source**: MIT-BIH Arrhythmia Database.
-- **Conversion**: Raw `.dat`/`.hea` files are converted to `.edf` (European Data Format) for clinical compatibility.
-- **Filtering**: A **0.5Hz - 40Hz Butterworth Bandpass Filter** is applied to remove baseline wander (breathing) and powerline interference.
-- **Normalization**: Per-segment **Z-Score Normalization** ensures the model learns heartbeat **morphology** (shape) rather than absolute voltage amplitudes.
-
-### 2. Deep Spiking Neural Network (DSNN) Training
-- **Architecture**: A Deep Convolutional SNN optimized for temporal signal processing.
-- **Segmentation**: 
-    - **Peak-Triggered**: Segments are centered exactly on the R-peak (detected via `.qrs` annotations).
-    - **Optimization**: Uses **Focal Loss** to combat class imbalance, forcing the model to prioritize rare arrhythmias over common "Normal" beats.
-- **Tracking**: Real-time progress is broadcast to the frontend via status polling, displaying live Loss/Accuracy curves.
-
-### 3. Clinical Analysis (Inference)
-- **High-Confidence Diagnosis**: The system analyzes full ECG recordings and provides a primary diagnosis with a confidence score.
-- **Peer-Review Ready**: Detailed breakdown of every segment type (Normal, AFib, Ventricular, etc.) is provided.
-- **Safety Thresholds**: Results falling below the configurable threshold (default 60%) are flagged as **Inconclusive** to ensure clinical safety.
+### Prerequisites needed heavily exclusively locally:
+- **Python** (version 3.10+)
+- **Node.js** (version 18+)
+- **NPM / Yarn**
+- **CUDA Toolkit** (Optional but recommended for rendering the DSNN iterations locally much quicker).
 
 ---
 
-## 📊 Arrhythmia Classes
-The model classifies ECG signals into 6 distinct categories:
-1. **Normal Sinus Rhythm**
-2. **Atrial Fibrillation (AFib)**
-3. **Ventricular Arrhythmia**
-4. **Conduction Block**
-5. **Premature Contraction**
-6. **ST Segment Abnormality**
+## ⚙️ Setup & Installations
+
+Execute the following actions chronologically to boot up the environment locally.
+
+### 1. Initialize the Backend
+Run the enclosed services spanning the data pipelines and active API.
+
+```bash
+# Navigate to the backend directory
+cd backend
+
+# (Optional but recommended) Create and activate a Virtual Environment
+python -m venv venv
+# On Windows: venv\Scripts\activate
+# On Mac/Linux: source venv/bin/activate
+
+# Install the Python dependencies
+pip install -r requirements.txt
+```
+
+### 2. Initialize the Frontend
+Install user-interface dependencies necessary to spin the React development server.
+
+```bash
+# Navigate to the frontend directory
+cd frontend
+
+# Install exact UI dependencies
+npm install
+```
 
 ---
 
-## 🛠️ Getting Started
+## 🎮 Commands: Running the Application
 
-### Prerequisites
-- **Python 3.10+**
-- **Node.js 18+**
-- **CUDA** (Optional, for GPU-accelerated training)
+To ensure smooth runtime performance, run the core servers across two concurrent active terminals:
 
-### Setup & Installation
+**Terminal 1 (Backend - API & Model Router)**
+```bash
+cd backend
+# With virtual environment activated:
+python app.py
+```
+> The API layer initializes on `http://localhost:5000`.
 
-1. **Install Backend Dependencies**:
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   ```
-
-2. **Install Frontend Dependencies**:
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-3. **Run the Application**:
-   Open two terminals:
-   - **Terminal 1 (Backend)**: `cd backend && python app.py`
-   - **Terminal 2 (Frontend)**: `cd frontend && npm run dev`
-
----
-
-## 📝 Tech Stack
-- **Frontend**: React, Vite, Recharts, Lucide React, Axios.
-- **Backend**: Flask, PyTorch (Deep Learning), WFDB (Bio-signal Processing), SciPy (Signal Processing), NumPy.
-- **Dataset**: MIT-BIH Arrhythmia Database (PhysioNet).
-
----
-*Developed for accurate, early detection of cardiac conditions.*
+**Terminal 2 (Frontend - CLI & UI Wrapper)**
+```bash
+cd frontend
+npm run dev
+```
+> The Web Application will normally initialize and compile on `http://localhost:5173`.
