@@ -11,7 +11,7 @@ This application aims to provide clinical-grade analysis of ECG recordings by le
 This project was developed to bridge the gap between advanced deep learning techniques in bio-signal processing and an accessible, user-friendly clinical interface.
 
 ### Key Features
-- **ECG Reader & Uploads**: Flexible mode selection for file uploads (`.dat`/`.hea`, `.edf`, or `.csv`), complete with robust background processing.
+- **ECG Reader & Uploads**: Flexible mode selection for file uploads (`.dat`/`.hea`, `.edf`, or `.qrs`), complete with robust background processing.
 - **Dynamic Visualization & Downloads**: Real-time rendering of ECG signals via interactive visualizations. Generated charts utilize image caching for optimized performance and are programmatically downloadable for clinical records.
 - **Deep Learning Pipeline**: Powered by a Deep Spiking Neural Network (DSNN) built in PyTorch. The model takes advantage of temporal signal dynamics and utilizes focal loss to handle class imbalances seamlessly.
 - **Live Training Dashboard**: Real-time progress broadcasts via status polling to the frontend. Live loss and accuracy curves allow researchers and clinicians to monitor model performance dynamically.
@@ -42,7 +42,6 @@ The application implements a strict 3-stage clinical pipeline converting raw sig
   3. Ventricular Arrhythmia
   4. Conduction Block
   5. Premature Contraction
-  6. ST Segment Abnormality
 - Delivers a primary diagnosis with an associated **confidence score**. Detailed segments map specific regions contributing to the classification.
 
 ---
@@ -54,18 +53,23 @@ Arrhythmia-Detection/
 ├── backend/                   # Python / Flask REST API & ML Services
 │   ├── app.py                 # Core app entry point
 │   ├── routes/                # Endpoints (api.py, web.py)
-│   ├── services/              # Core logic & ML Pipelines (train_dsnn.py, converter.py)
+│   ├── services/              # Core logic & ML Pipelines (train_dsnn.py, converter.py, ecg_reader.py)
 │   ├── models/                # Checkpoints & serialized PyTorch models (.pth)
-│   ├── results/               # Persisted Analysis Reports (JSON)
+│   ├── results/               # Persisted Analysis Reports (results.json, training_results.json)
 │   ├── uploads/               # Temporary parsing directory for incoming ECG readings
-│   └── images/                # Cached & programmatic generated Training Visualizations
+│   └── images/                # Cached & programmatic generated Training Visualizations (training_history.png, confusion_matrix.png, ecg_daigrams)
 ├── frontend/                  # React + Vite Frontend UI
 │   ├── src/
-│   │   ├── pages/             # Main Views (Dashboard, ModelTraining, Upload, Results)
-│   │   ├── components/        # Isolated UI pieces (Sidebar, Header, Interactive Charts)
+│   │   ├── pages/             # Main Views (Dashboard, History, Home, ModelTraining, Upload, Results, Settings)
+│   │   ├── components/        # Isolated UI pieces (Sidebar, Header, LoadingSpinner)
+│   │   ├── services/          # API Services (api.js)
 │   │   ├── App.jsx            # Routing Rules & Theme Provider Context
-│   │   └── App.css            # Scoped layout styling and transitions
-│   └── vite.config.js         # Build tooling config
+│   │   ├── App.css            # Scoped layout styling and transitions
+|   |   ├── main.jsx           # Entry point
+|   |   ├── index.css          # Global styles
+|   |   └── index.html         # HTML template
+|   ├── assets/            # Static assets (images, fonts, etc.)
+|   ├── vite.config.js     # Build tooling config
 └── Dataset/                   # Persistent ECG Data Repository
     ├── MIT-BIH/               # Benchmark training records (.edf, .qrs)
     └── test/                  # Test set mappings for independent inference
@@ -100,8 +104,6 @@ cd backend
 
 # (Optional but recommended) Create and activate a Virtual Environment
 python -m venv venv
-# On Windows: venv\Scripts\activate
-# On Mac/Linux: source venv/bin/activate
 
 # Install the Python dependencies
 pip install -r requirements.txt
@@ -127,8 +129,15 @@ To ensure smooth runtime performance, run the core servers across two concurrent
 **Terminal 1 (Backend - API & Model Router)**
 ```bash
 cd backend
-# With virtual environment activated:
+# Activate the virtual environment
+# On Windows
+venv\Scripts\activate
+
+# On Mac/Linux
+source venv/bin/activate
+
 python app.py
+
 ```
 > The API layer initializes on `http://localhost:5000`.
 
