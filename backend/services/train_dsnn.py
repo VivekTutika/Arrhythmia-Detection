@@ -241,7 +241,6 @@ class DSNNSystem:
         - Gradient clipping for training stability
         - CosineAnnealingWarmRestarts scheduler for smooth LR decay
         - Best-loss model selection for final evaluation (better generalization)
-        - Early stopping with patience=25
         """
         self.model.train()
         
@@ -278,13 +277,10 @@ class DSNNSystem:
         
         best_val_acc = 0.0
         best_val_loss = float('inf')
-        patience_counter = 0
-        early_stop_patience = 25  # Stop if no improvement for 25 epochs
         training_history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
         
         print(f"Starting optimized training for {epochs} epochs...")
         print(f"  Gradient clipping: max_norm=1.0")
-        print(f"  Early stopping patience: {early_stop_patience} epochs")
         
         for epoch in range(epochs):
             # Check if training should be stopped by user
@@ -380,7 +376,6 @@ class DSNNSystem:
             # Save checkpoints for best LOSS model (primary model for deployment)
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
-                patience_counter = 0  # Reset early stopping counter
                 torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': self.model.state_dict(),
@@ -389,8 +384,6 @@ class DSNNSystem:
                     'val_acc': val_acc,
                 }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth'))
                 print(f"📉 New best validation loss: {avg_val_loss:.4f} (Saved)")
-            else:
-                patience_counter += 1
 
             # Save checkpoints for best ACCURACY model (secondary)
             if val_acc > best_val_acc:
@@ -403,11 +396,6 @@ class DSNNSystem:
                     'val_acc': val_acc,
                 }, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_acc_model.pth'))
                 print(f"⭐ New best validation accuracy: {val_acc:.2f}% (Saved)")
-            
-            # Early stopping
-            if patience_counter >= early_stop_patience:
-                print(f"\n⏹ Early stopping triggered at epoch {epoch+1} (no val loss improvement for {early_stop_patience} epochs)")
-                break
 
         # After training, load the best LOSS model for final evaluation (best generalization)
         best_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best_loss_model.pth')

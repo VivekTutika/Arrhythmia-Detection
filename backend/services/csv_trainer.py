@@ -304,7 +304,7 @@ def train_csv_model(
         # Stronger weight decay + balanced learning rate
         optimizer  = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-2)
         # Natively locks onto validation peaks to stop stuttering
-        scheduler  = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
+        scheduler  = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5)
 
         logger.info(f"Model params: {sum(p.numel() for p in model.parameters()):,} | Device: {device}")
 
@@ -313,8 +313,6 @@ def train_csv_model(
         model_path         = os.path.join(models_dir, 'model_csv.pth')
         best_val_acc       = -1.0
         best_state_dict    = None
-        patience_counter   = 0
-        patience_limit     = 12
 
         for epoch in range(1, epochs + 1):
             # Stop signal
@@ -358,14 +356,11 @@ def train_csv_model(
             val_loss = val_loss_sum / val_total
             val_acc  = val_correct  / val_total * 100
 
-            # Best-model checkpoint & Early Stopping
+            # Best-model checkpoint
             if val_acc > best_val_acc:
                 best_val_acc    = val_acc
                 best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                patience_counter = 0
                 logger.info(f"  ↑ New best val_acc={best_val_acc:.2f}% at epoch {epoch}")
-            else:
-                patience_counter += 1
 
             ep_record = {
                 'epoch':      epoch,
@@ -389,10 +384,6 @@ def train_csv_model(
 
             # Step the plateau scheduler strictly on val_acc
             scheduler.step(val_acc)
-
-            if patience_counter >= patience_limit:
-                logger.info(f"Early stopping triggered at epoch {epoch} (No improvement for {patience_limit} epochs)")
-                break
 
         # ---------- Save best checkpoint (not last epoch) ----------
         if best_state_dict is not None:
