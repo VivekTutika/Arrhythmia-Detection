@@ -96,24 +96,54 @@ export const convertMitbih = async () => {
   return response.data;
 };
 
-// Train model
-export const trainModel = async (datasetPath, epochs) => {
+// Train model — mode: 'raw' (default DSNN) | 'csv' (new MLP)
+export const trainModel = async (datasetPath, epochs, mode = 'raw') => {
   const response = await apiClient.post('/api/train-model', {
     dataset_path: datasetPath,
-    epochs: epochs
+    epochs: epochs,
+    mode: mode,
   });
   return response.data;
 };
 
-// Get training status
-export const getTrainingStatus = async () => {
-  const response = await apiClient.get('/api/training-status');
+// Split CSV dataset by record (new)
+export const splitCSV = async (datasetPath) => {
+  const response = await apiClient.post('/api/split-csv', {
+    dataset_path: datasetPath,
+  });
   return response.data;
 };
 
-// Stop training
-export const stopTraining = async () => {
-  const response = await apiClient.post('/api/stop-training');
+// Analyze CSV file in batch mode (new)
+export const analyzeCSV = async (csvFile, patientInfo = {}) => {
+  const formData = new FormData();
+  formData.append('file', csvFile);
+  formData.append('mode', 'csv');
+  formData.append('patient_info', JSON.stringify(patientInfo));
+
+  try {
+    const savedSettings = localStorage.getItem('appSettings');
+    if (savedSettings) formData.append('settings', savedSettings);
+  } catch (e) {
+    console.error('Error reading settings', e);
+  }
+
+  const response = await apiClient.post('/api/analyze', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000, // CSV batch inference can be slow
+  });
+  return response.data;
+};
+
+// Get training status — mode: 'raw' (default) | 'csv'
+export const getTrainingStatus = async (mode = 'raw') => {
+  const response = await apiClient.get('/api/training-status', { params: { mode } });
+  return response.data;
+};
+
+// Stop training — mode: 'raw' (default) | 'csv'
+export const stopTraining = async (mode = 'raw') => {
+  const response = await apiClient.post('/api/stop-training', { mode });
   return response.data;
 };
 

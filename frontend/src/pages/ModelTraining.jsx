@@ -19,7 +19,7 @@ import {
   Download,
   UploadCloud
 } from 'lucide-react';
-import { convertMitbih, trainModel, getTrainingStatus, stopTraining, getECGVisualization } from '../services/api';
+import { convertMitbih, trainModel, getTrainingStatus, stopTraining, getECGVisualization, splitCSV } from '../services/api';
 
 const ModelTraining = ({ setIsLoading }) => {
   const [activeTab, setActiveTab] = useState('training');
@@ -44,6 +44,15 @@ const ModelTraining = ({ setIsLoading }) => {
   const [showStartConfirm, setShowStartConfirm] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const pollIntervalRef = useRef(null);
+
+  // --- Dual-Mode State ---
+  const [preprocessMode, setPreprocessMode] = useState('raw');   // 'raw' | 'csv'
+  const [trainingMode, setTrainingMode] = useState('raw');        // 'raw' | 'csv'
+  const [activeTrainingMode, setActiveTrainingMode] = useState('raw'); // mode of the last/running session
+  const [csvSplitPath, setCsvSplitPath] = useState('');
+  const [csvSplitResult, setCsvSplitResult] = useState(null);
+  const [splitting, setSplitting] = useState(false);
+  const [csvTrainPath, setCsvTrainPath] = useState('Dataset/CSV/splits');
 
   // --- New ECG Reader State ---
   const [ecgMode, setEcgMode] = useState('dataset');
@@ -109,7 +118,6 @@ const ModelTraining = ({ setIsLoading }) => {
     setConverting(true);
     setConversionResult(null);
     setIsLoading(true);
-    
     try {
       const result = await convertMitbih();
       setConversionResult(result);
@@ -124,16 +132,33 @@ const ModelTraining = ({ setIsLoading }) => {
     }
   };
 
-  const startPolling = () => {
+  const handleSplitCSV = async () => {
+    if (!csvSplitPath.trim()) return;
+    setSplitting(true);
+    setCsvSplitResult(null);
+    try {
+      const result = await splitCSV(csvSplitPath.trim());
+      setCsvSplitResult({ success: true, ...result });
+    } catch (error) {
+      setCsvSplitResult({
+        success: false,
+        error: error.response?.data?.error || error.message || 'Split failed'
+      });
+    } finally {
+      setSplitting(false);
+    }
+  };
+
+  const startPolling = (modeToUse) => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
     }
-    
+
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const status = await getTrainingStatus();
+        const status = await getTrainingStatus(modeToUse);
         setTrainingStatus(status);
-        
+
         if (status.status === 'completed' || status.status === 'stopped' || status.status === 'failed') {
           setTraining(false);
           clearInterval(pollIntervalRef.current);
@@ -142,18 +167,19 @@ const ModelTraining = ({ setIsLoading }) => {
       } catch (error) {
         console.error('Polling error:', error);
       }
-    }, 2000);
+    }, 5000);
   };
 
   const handleStartTraining = async () => {
     setShowStartConfirm(false);
     setTrainingStatus(null);
     setTraining(true);
-    
+    setActiveTrainingMode(trainingMode); // lock in the mode for this session
     try {
-      const result = await trainModel(datasetPath, epochs);
+      const path = trainingMode === 'csv' ? csvTrainPath : datasetPath;
+      const result = await trainModel(path, epochs, trainingMode);
       console.log('Training started:', result);
-      startPolling();
+      startPolling(trainingMode);
     } catch (error) {
       console.error('Training error:', error);
       setTraining(false);
@@ -162,11 +188,9 @@ const ModelTraining = ({ setIsLoading }) => {
 
   const handleStopTraining = async () => {
     setShowStopConfirm(false);
-    
     try {
-      const result = await stopTraining();
+      const result = await stopTraining(activeTrainingMode);
       console.log('Stop training result:', result);
-      // Polling will handle updating the status
     } catch (error) {
       console.error('Error stopping training:', error);
     }
@@ -195,6 +219,17 @@ const ModelTraining = ({ setIsLoading }) => {
   const hasModels = () => {
     return trainingStatus?.model_exists;
   };
+
+  // ── When the user switches the Training Mode selector, load that mode's
+  //    persisted status so results are always visible for the selected pipeline.
+  useEffect(() => {
+    if (training) return; // don't interrupt an active run
+    let cancelled = false;
+    getTrainingStatus(trainingMode).then(status => {
+      if (!cancelled) setTrainingStatus(status);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [trainingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="model-training-page">
@@ -233,93 +268,87 @@ const ModelTraining = ({ setIsLoading }) => {
         <div className="card">
           <div className="card-header">
             <div>
-              <h3 className="card-title">MIT-BIH Dataset Conversion</h3>
-              <p className="card-subtitle">Convert MIT-BIH dataset files (.hea, .dat, .atr) to EDF and QRS format</p>
+              <h3 className="card-title">Pre-Processing</h3>
+              <p className="card-subtitle">Select a pre-processing mode to prepare your dataset</p>
             </div>
           </div>
-          
-          <div>
-            <div style={{ 
-              display: 'flex', 
-              flexDirection: 'column', 
-              alignItems: 'center', 
-              gap: '16px',
-              padding: '32px',
-              background: 'var(--background-secondary)',
-              borderRadius: '12px'
-            }}>
-              <div style={{ 
-                width: '64px', 
-                height: '64px', 
-                borderRadius: '50%', 
-                background: 'var(--primary-color)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <RefreshCw size={32} color="white" />
-              </div>
-              
-              <div className="processing-info">
-                <div className="processing-info-icon">
-                  <RefreshCw size={20} color="white" />
-                </div>
-                <div className="processing-info-content">
-                  <div className="processing-info-title">Estimated Processing Time</div>
-                  <div className="processing-info-text">
-                    Conversion typically takes 5-10 minutes depending on the number of files. 
-                    The process runs in the background and you'll be notified upon completion.
-                  </div>
-                </div>
-              </div>
-              
-              <button 
-                className="btn btn-primary"
-                onClick={handleConvert}
-                disabled={converting}
-                style={{ minWidth: '200px' }}
-              >
-                {converting ? (
-                  <>
-                    <RefreshCw size={18} className="spin" />
-                    Converting...
-                  </>
-                ) : (
-                  <>
-                    <Play size={18} />
-                    Convert MIT-BIH Data
-                  </>
-                )}
-              </button>
 
-              {converting && (
-                <div className="processing-progress">
-                  <div className="processing-progress-bar">
-                    <div className="processing-progress-fill" style={{ width: '60%' }}></div>
-                  </div>
-                  <div className="processing-progress-text">Processing files...</div>
-                </div>
-              )}
+          {/* Mode Selector */}
+          <div style={{ padding: '0 8px 24px' }}>
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+              {[{ val: 'raw', label: 'Convert Raw MIT-BIH', icon: <RefreshCw size={18} /> },
+                { val: 'csv', label: 'Split CSV Dataset', icon: <Database size={18} /> }]
+                .map(({ val, label, icon }) => (
+                  <label key={val} style={{
+                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    gap: '10px', cursor: 'pointer', padding: '14px 16px', borderRadius: '10px',
+                    border: preprocessMode === val ? '2px solid var(--primary-color)' : '2px solid var(--border-color)',
+                    background: preprocessMode === val ? 'rgba(99,102,241,0.1)' : 'var(--background-secondary)',
+                    color: preprocessMode === val ? 'var(--primary-color)' : 'var(--text-secondary)',
+                    fontWeight: preprocessMode === val ? '600' : '500',
+                    transition: 'all 0.2s',
+                  }}>
+                    <input type="radio" name="preprocessMode" value={val}
+                      checked={preprocessMode === val} onChange={() => setPreprocessMode(val)}
+                      style={{ display: 'none' }} />
+                    {icon} {label}
+                  </label>
+                ))}
             </div>
 
-            {conversionResult && (
+            {/* RAW mode panel */}
+            {preprocessMode === 'raw' && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                gap: '16px', padding: '32px',
+                background: 'var(--background-secondary)', borderRadius: '12px'
+              }}>
+                <div style={{
+                  width: '64px', height: '64px', borderRadius: '50%',
+                  background: 'var(--primary-color)', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center'
+                }}>
+                  <RefreshCw size={32} color="white" />
+                </div>
+                <div className="processing-info">
+                  <div className="processing-info-icon"><RefreshCw size={20} color="white" /></div>
+                  <div className="processing-info-content">
+                    <div className="processing-info-title">Estimated Processing Time</div>
+                    <div className="processing-info-text">
+                      Conversion typically takes 5–10 minutes depending on the number of files.
+                      The process runs in the background and you'll be notified upon completion.
+                    </div>
+                  </div>
+                </div>
+                <button className="btn btn-primary" onClick={handleConvert}
+                  disabled={converting} style={{ minWidth: '200px' }}>
+                  {converting ? (<><RefreshCw size={18} className="spin" />Converting...</>)
+                    : (<><Play size={18} />Convert MIT-BIH Data</>)}
+                </button>
+                {converting && (
+                  <div className="processing-progress">
+                    <div className="processing-progress-bar">
+                      <div className="processing-progress-fill" style={{ width: '60%' }} />
+                    </div>
+                    <div className="processing-progress-text">Processing files...</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* RAW conversion result */}
+            {preprocessMode === 'raw' && conversionResult && (
               <div style={{ marginTop: '24px' }}>
                 {conversionResult.success ? (
                   <div className="status-banner status-success">
                     <CheckCircle size={24} style={{ color: '#10b981', flexShrink: 0 }} />
                     <div>
                       <h4 style={{ margin: '0 0 8px 0', color: '#10b981' }}>Conversion Successful!</h4>
-                      <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
-                        {conversionResult.message}
-                      </p>
+                      <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{conversionResult.message}</p>
                       {conversionResult.results && (
                         <div style={{ marginTop: '12px', display: 'flex', gap: '24px' }}>
-                          <div>
-                            <span style={{ fontWeight: 'bold' }}>EDF Files:</span> {conversionResult.results.edf.success} created
-                          </div>
-                          <div>
-                            <span style={{ fontWeight: 'bold' }}>QRS Files:</span> {conversionResult.results.qrs.success} created
-                          </div>
+                          <div><span style={{ fontWeight: 'bold' }}>EDF:</span> {conversionResult.results.edf.success} files</div>
+                          <div><span style={{ fontWeight: 'bold' }}>QRS:</span> {conversionResult.results.qrs.success} files</div>
                         </div>
                       )}
                     </div>
@@ -333,6 +362,75 @@ const ModelTraining = ({ setIsLoading }) => {
                         {conversionResult.error || 'An error occurred during conversion'}
                       </p>
                     </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* CSV Split mode panel */}
+            {preprocessMode === 'csv' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{
+                  background: 'var(--background-secondary)', borderRadius: '12px', padding: '24px'
+                }}>
+                  <div className="processing-info" style={{ marginBottom: '20px' }}>
+                    <div className="processing-info-icon"><Database size={20} color="white" /></div>
+                    <div className="processing-info-content">
+                      <div className="processing-info-title">Record-Based CSV Split</div>
+                      <div className="processing-info-text">
+                        Splits your CSV dataset into train/test sets using fixed test records
+                        [101, 200, 207, 209, 213, 222, 228] to prevent data leakage.
+                        Output saved to <code style={{ background: 'rgba(99,102,241,0.15)', padding: '2px 6px', borderRadius: '4px' }}>Dataset/CSV/splits/</code>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">CSV Dataset Path</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={csvSplitPath}
+                      onChange={(e) => setCsvSplitPath(e.target.value)}
+                      placeholder="e.g. Dataset/CSV/mitbih_features.csv"
+                      disabled={splitting}
+                    />
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Absolute or relative path to your source CSV file containing a 'record' column.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <button className="btn btn-primary" onClick={handleSplitCSV}
+                      disabled={splitting || !csvSplitPath.trim()} style={{ minWidth: '200px' }}>
+                      {splitting
+                        ? (<><RefreshCw size={18} className="spin" />Splitting...</>)
+                        : (<><Play size={18} />Split CSV Dataset</>)}
+                    </button>
+                  </div>
+                </div>
+
+                {csvSplitResult && (
+                  <div>
+                    {csvSplitResult.success ? (
+                      <div className="status-banner status-success">
+                        <CheckCircle size={24} style={{ color: '#10b981', flexShrink: 0 }} />
+                        <div>
+                          <h4 style={{ margin: '0 0 8px 0', color: '#10b981' }}>Split Successful!</h4>
+                          <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                            <span>Total rows: <strong>{csvSplitResult.total_rows?.toLocaleString()}</strong></span>
+                            <span>Train rows: <strong style={{ color: '#10b981' }}>{csvSplitResult.train_rows?.toLocaleString()}</strong></span>
+                            <span>Test rows: <strong style={{ color: '#6366f1' }}>{csvSplitResult.test_rows?.toLocaleString()}</strong></span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="status-banner status-error">
+                        <XCircle size={24} style={{ color: '#ef4444', flexShrink: 0 }} />
+                        <div>
+                          <h4 style={{ margin: '0 0 8px 0', color: '#ef4444' }}>Split Failed</h4>
+                          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{csvSplitResult.error}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -370,47 +468,82 @@ const ModelTraining = ({ setIsLoading }) => {
           <div className="card">
             <div className="card-header">
               <div>
-                <h3 className="card-title">Train DSNN Model</h3>
-                <p className="card-subtitle">Configure and train the Deep Spiking Neural Network for Arrhythmia Detection</p>
+                <h3 className="card-title">Train Model</h3>
+                <p className="card-subtitle">Configure a training mode and start training your arrhythmia detection model</p>
               </div>
             </div>
-            
+
             <div style={{ padding: '8px' }}>
-              {/* Training Configuration */}
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+              {/* Training Mode Selector */}
+              <div style={{ marginBottom: '24px' }}>
+                <label className="form-label" style={{ marginBottom: '10px', display: 'block' }}>Training Mode</label>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  {[{ val: 'raw', label: 'Raw ECG (DSNN)', icon: <Activity size={18} /> },
+                    { val: 'csv', label: 'CSV Dataset (MLP)', icon: <Database size={18} /> }]
+                    .map(({ val, label, icon }) => (
+                      <label key={val} style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        gap: '10px', cursor: training ? 'not-allowed' : 'pointer',
+                        padding: '14px 16px', borderRadius: '10px',
+                        border: trainingMode === val ? '2px solid var(--primary-color)' : '2px solid var(--border-color)',
+                        background: trainingMode === val ? 'rgba(99,102,241,0.1)' : 'var(--background-secondary)',
+                        color: trainingMode === val ? 'var(--primary-color)' : 'var(--text-secondary)',
+                        fontWeight: trainingMode === val ? '600' : '500',
+                        opacity: training ? 0.6 : 1,
+                        transition: 'all 0.2s',
+                      }}>
+                        <input type="radio" name="trainingMode" value={val}
+                          checked={trainingMode === val}
+                          onChange={() => !training && setTrainingMode(val)}
+                          style={{ display: 'none' }} />
+                        {icon} {label}
+                      </label>
+                    ))}
+                </div>
+              </div>
+
+              {/* Training Configuration — adapts to mode */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
                 gap: '24px',
                 marginBottom: '24px'
               }}>
-                <div className="form-group">
-                  <label className="form-label">Dataset Path</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={datasetPath}
-                    onChange={(e) => setDatasetPath(e.target.value)}
-                    placeholder="Dataset/MIT-BIH"
-                    disabled={training}
-                  />
-                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                    Path to the folder containing converted EDF and QRS files (run Pre-Processing first)
-                  </p>
-                </div>
-                
+                {trainingMode === 'raw' ? (
+                  <div className="form-group">
+                    <label className="form-label">EDF Dataset Path</label>
+                    <input type="text" className="form-input"
+                      value={datasetPath}
+                      onChange={(e) => setDatasetPath(e.target.value)}
+                      placeholder="Dataset/MIT-BIH"
+                      disabled={training} />
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Folder containing converted EDF + QRS files (run Pre-Processing first)
+                    </p>
+                  </div>
+                ) : (
+                  <div className="form-group">
+                    <label className="form-label">CSV Splits Directory</label>
+                    <input type="text" className="form-input"
+                      value={csvTrainPath}
+                      onChange={(e) => setCsvTrainPath(e.target.value)}
+                      placeholder="Dataset/CSV/splits"
+                      disabled={training} />
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Folder containing <code>train.csv</code> + <code>test.csv</code> (run CSV Split in Pre-Processing first).
+                      You can also provide a direct path to a <code>.csv</code> file to auto-split.
+                    </p>
+                  </div>
+                )}
+
                 <div className="form-group">
                   <label className="form-label">Number of Epochs</label>
-                  <input
-                    type="number"
-                    className="form-input"
+                  <input type="number" className="form-input"
                     value={epochs}
                     onChange={(e) => setEpochs(parseInt(e.target.value) || 50)}
-                    min={1}
-                    max={5000}
-                    disabled={training}
-                  />
+                    min={1} max={5000} disabled={training} />
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                    Training iterations (recommended: 50-200) (Min: 1, Max: 5000)
+                    Training iterations (recommended: 50–200) (Min: 1, Max: 5000)
                   </p>
                 </div>
               </div>
@@ -423,20 +556,32 @@ const ModelTraining = ({ setIsLoading }) => {
                   <div className="processing-info-title">Estimated Processing Time</div>
                   <div className="processing-info-text">
                     {(() => {
-                      const trainFiles = 40;
-                      const secPerEpochPerFile = 0.75;
-                      const totalSec = Math.round(trainFiles * epochs * secPerEpochPerFile);
-                      const dataLoadOverhead = Math.round(trainFiles * 2);
-                      const totalWithOverhead = totalSec + dataLoadOverhead;
-
-                      if (totalWithOverhead < 60) {
-                        return `Training ${trainFiles} files for ${epochs} epochs: ~${totalWithOverhead} seconds.`;
-                      } else if (totalWithOverhead < 3600) {
-                        const mins = Math.ceil(totalWithOverhead / 60);
-                        return `Training ${trainFiles} files for ${epochs} epochs: ~${mins} minutes.`;
+                      if (trainingMode === 'csv') {
+                        // Fast Tabular Pipeline (~1-2 seconds per epoch total)
+                        const secPerEpoch = 5.0;
+                        const totalSec = Math.round(epochs * secPerEpoch) + 3; // +3s for loading
+                        if (totalSec < 60) {
+                          return `Training CSV Tabular data for ${epochs} epochs: ~${totalSec} seconds.`;
+                        } else {
+                          const mins = Math.ceil(totalSec / 60);
+                          return `Training CSV Tabular data for ${epochs} epochs: ~${mins} minutes.`;
+                        }
                       } else {
-                        const hrs = (totalWithOverhead / 3600).toFixed(1);
-                        return `Training ${trainFiles} files for ${epochs} epochs: ~${hrs} hours.`;
+                        // Heavy Raw DSNN (~90-120 mins per 50 epochs -> ~126 seconds per epoch base)
+                        const secPerEpoch = 126;
+                        const totalSec = Math.round(epochs * secPerEpoch);
+                        
+                        if (totalSec < 3600) {
+                          const mins = Math.ceil(totalSec / 60);
+                          // Calculate a realistic 0.85x to 1.15x bound
+                          const rangeLow = Math.max(1, Math.round(mins * 0.85));
+                          const rangeHigh = Math.round(mins * 1.15);
+                          return `Processing Raw EDF data for ${epochs} epochs: ~${rangeLow}-${rangeHigh} minutes.`;
+                        } else {
+                          const hrsLow = ((totalSec * 0.85) / 3600).toFixed(1);
+                          const hrsHigh = ((totalSec * 1.15) / 3600).toFixed(1);
+                          return `Processing Raw EDF data for ${epochs} epochs: ~${hrsLow}-${hrsHigh} hours.`;
+                        }
                       }
                     })()}
                     {' '}Time may vary based on your device performance (CPU vs GPU).
@@ -705,63 +850,80 @@ const ModelTraining = ({ setIsLoading }) => {
           })()}
 
           {/* Output Images Section */}
-          {hasImages() && (
-            <div className="card">
-              <div className="card-header">
-                <div>
-                  <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <TrendingUp size={20} />
-                    Training Visualizations
-                  </h3>
-                  <p className="card-subtitle">Model training history and evaluation results</p>
+          {hasImages() && (() => {
+            const modeLabel = trainingStatus.mode === 'csv' ? 'CSV / MLP' : 'Raw ECG / DSNN';
+            const IMAGE_TITLES = {
+              'training_history_csv.png': 'MLP Training History (Loss & Accuracy)',
+              'confusion_matrix_csv.png': 'MLP Confusion Matrix (Test Set)',
+              'training_history.png':     'DSNN Training History (Loss & Accuracy)',
+              'confusion_matrix.png':     'DSNN Confusion Matrix (Test Set)',
+            };
+            const getTitle = (url) => {
+              const file = Object.keys(IMAGE_TITLES).find(k => url.includes(k));
+              return file ? IMAGE_TITLES[file] : (url.includes('training') ? 'Training History' : 'Confusion Matrix');
+            };
+            return (
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <TrendingUp size={20} />
+                      Training Visualizations
+                      <span style={{
+                        fontSize: '11px', fontWeight: '500', padding: '2px 8px',
+                        borderRadius: '999px', marginLeft: '4px',
+                        background: trainingStatus.mode === 'csv' ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)',
+                        color:      trainingStatus.mode === 'csv' ? '#10b981' : '#6366f1',
+                      }}>{modeLabel}</span>
+                    </h3>
+                    <p className="card-subtitle">Model training history and evaluation results</p>
+                  </div>
+                </div>
+                <div style={{ padding: '8px' }}>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                    gap: '16px'
+                  }}>
+                    {trainingStatus.image_files.map((img, idx) => (
+                      <div key={idx} style={{
+                        background: 'var(--background-secondary)',
+                        borderRadius: '8px', overflow: 'hidden'
+                      }}>
+                        <div style={{
+                          padding: '12px', borderBottom: '1px solid var(--border-color)',
+                          display: 'flex', alignItems: 'center', gap: '8px'
+                        }}>
+                          <span style={{
+                            width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                            background: trainingStatus.mode === 'csv' ? '#10b981' : '#6366f1'
+                          }} />
+                          <span style={{ fontWeight: '500', fontSize: '13px' }}>{getTitle(img)}</span>
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                          <img
+                            src={img}
+                            alt={getTitle(img)}
+                            style={{ width: '100%', height: 'auto', display: 'block' }}
+                          />
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => setExpandedImage(img)}
+                            style={{
+                              position: 'absolute', top: '8px', right: '8px',
+                              background: 'rgba(0,0,0,0.5)', color: 'white'
+                            }}
+                          >
+                            <Maximize2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div style={{ padding: '8px' }}>
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-                  gap: '16px' 
-                }}>
-                  {trainingStatus.image_files.map((img, idx) => (
-                    <div 
-                      key={idx}
-                      style={{ 
-                        background: 'var(--background-secondary)', 
-                        borderRadius: '8px',
-                        overflow: 'hidden'
-                      }}
-                    >
-                      <div style={{ padding: '12px', borderBottom: '1px solid var(--border-color)' }}>
-                        <span style={{ fontWeight: '500' }}>
-                          {img.includes('training') ? 'Training History' : 'Confusion Matrix'}
-                        </span>
-                      </div>
-                      <div style={{ position: 'relative' }}>
-                        <img 
-                          src={img}
-                          alt={img.includes('training') ? 'Training History' : 'Confusion Matrix'} 
-                          style={{ width: '100%', height: 'auto', display: 'block' }}
-                        />
-                        <button
-                          className="btn btn-sm btn-secondary"
-                          onClick={() => setExpandedImage(img)}
-                          style={{ 
-                            position: 'absolute', 
-                            top: '8px', 
-                            right: '8px',
-                            background: 'rgba(0,0,0,0.5)',
-                            color: 'white'
-                          }}
-                        >
-                          <Maximize2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* No Results Yet */}
           {!hasImages() && !training && trainingStatus && trainingStatus.status === 'not_started' && !hasModels() && (
@@ -1051,23 +1213,16 @@ const ModelTraining = ({ setIsLoading }) => {
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '400px' }}>
             <h3 style={{ marginTop: 0 }}>Confirm Training</h3>
-            <p>Are you sure you want to Start Training the Model?</p>
+            <p>Are you sure you want to start training the model?</p>
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-              This will train the DSNN model with {epochs} epochs using the dataset at "{datasetPath}".
+              {trainingMode === 'csv'
+                ? <>Will train the <strong>MLP (CSV)</strong> model for {epochs} epochs using splits at <em>"{csvTrainPath}"</em>.</>
+                : <>Will train the <strong>DSNN (Raw ECG)</strong> model for {epochs} epochs using dataset at <em>"{datasetPath}"</em>.</>
+              }
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button 
-                className="btn btn-secondary"
-                onClick={() => setShowStartConfirm(false)}
-              >
-                Cancel
-              </button>
-              <button 
-                className="btn btn-primary"
-                onClick={handleStartTraining}
-              >
-                Start Training
-              </button>
+              <button className="btn btn-secondary" onClick={() => setShowStartConfirm(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleStartTraining}>Start Training</button>
             </div>
           </div>
         </div>

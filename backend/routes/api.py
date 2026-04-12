@@ -24,7 +24,11 @@ TRAINING_RESULTS_FILE = os.path.join(os.path.dirname(__file__), '..', 'results',
 # Backup for transactional updates (restore on stop/failure)
 TRAINING_BACKUP_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'training_results.bak')
 
-# Training status tracking (global variable)
+# --- Separate persistence for CSV/MLP training ---
+TRAINING_RESULTS_CSV_FILE = os.path.join(os.path.dirname(__file__), '..', 'results', 'training_results_csv.json')
+TRAINING_BACKUP_CSV_FILE  = os.path.join(os.path.dirname(__file__), '..', 'results', 'training_results_csv.bak')
+
+# Training status tracking — Raw ECG / DSNN
 TRAINING_STATUS = {
     'status': 'not_started',  # not_started, running, completed, failed, stopped
     'progress': 0,
@@ -39,12 +43,31 @@ TRAINING_STATUS = {
     'training_process': None,
     'metrics': {
         'history': [],          # per-epoch: {epoch, train_loss, train_acc, val_loss, val_acc}
-        'evaluation': None      # final: {accuracy, precision, recall, f1, report}
+        'evaluation': None      # final: {accuracy, precision, recall, f1}
     }
 }
 
-# Threading event to signal training to stop
-TRAINING_STOP_EVENT = threading.Event()
+# Training status tracking — CSV / MLP  (completely separate from TRAINING_STATUS)
+CSV_TRAINING_STATUS = {
+    'status': 'not_started',
+    'progress': 0,
+    'message': '',
+    'error': None,
+    'start_time': None,
+    'end_time': None,
+    'epochs': 0,
+    'current_epoch': 0,
+    'image_files': [],
+    'training_thread': None,
+    'metrics': {
+        'history': [],
+        'evaluation': None
+    }
+}
+
+# Threading events — one per pipeline
+TRAINING_STOP_EVENT     = threading.Event()
+CSV_TRAINING_STOP_EVENT = threading.Event()
 
 
 def backup_training_results():
@@ -109,7 +132,7 @@ def save_training_results():
 
 
 def load_training_results():
-    """Load the last persisted training results from disk."""
+    """Load the last persisted raw training results from disk."""
     try:
         if os.path.exists(TRAINING_RESULTS_FILE):
             with open(TRAINING_RESULTS_FILE, 'r') as f:
@@ -118,8 +141,80 @@ def load_training_results():
         logger.error(f"Failed to load training results: {e}")
     return None
 
+
+# ---------------------------------------------------------------
+# CSV / MLP training persistence helpers
+# ---------------------------------------------------------------
+def backup_csv_training_results():
+    """Create a backup of current CSV training results before starting a new run."""
+    try:
+        if os.path.exists(TRAINING_RESULTS_CSV_FILE):
+            import shutil
+            shutil.copy2(TRAINING_RESULTS_CSV_FILE, TRAINING_BACKUP_CSV_FILE)
+            logger.info("Created backup of previous CSV training results.")
+    except Exception as e:
+        logger.error(f"Failed to create CSV training results backup: {e}")
+
+
+def rollback_csv_training_results():
+    """Restore CSV results from backup if a run fails or is stopped."""
+    global CSV_TRAINING_STATUS
+    try:
+        if os.path.exists(TRAINING_BACKUP_CSV_FILE):
+            import shutil
+            shutil.copy2(TRAINING_BACKUP_CSV_FILE, TRAINING_RESULTS_CSV_FILE)
+            with open(TRAINING_RESULTS_CSV_FILE, 'r') as f:
+                saved = json.load(f)
+                CSV_TRAINING_STATUS['status']        = saved.get('status', 'not_started')
+                CSV_TRAINING_STATUS['progress']      = saved.get('progress', 0)
+                CSV_TRAINING_STATUS['message']       = saved.get('message', '')
+                CSV_TRAINING_STATUS['error']         = saved.get('error')
+                CSV_TRAINING_STATUS['start_time']    = saved.get('start_time')
+                CSV_TRAINING_STATUS['end_time']      = saved.get('end_time')
+                CSV_TRAINING_STATUS['epochs']        = saved.get('epochs', 0)
+                CSV_TRAINING_STATUS['current_epoch'] = saved.get('current_epoch', 0)
+                CSV_TRAINING_STATUS['metrics']       = saved.get('metrics', {'history': [], 'evaluation': None})
+            os.remove(TRAINING_BACKUP_CSV_FILE)
+            logger.info("Rolled back to previous CSV training results.")
+            return True
+    except Exception as e:
+        logger.error(f"Failed to rollback CSV training results: {e}")
+    return False
+
+
+def save_csv_training_results():
+    """Persist the current CSV_TRAINING_STATUS to disk."""
+    try:
+        data = {
+            'status':        CSV_TRAINING_STATUS['status'],
+            'progress':      CSV_TRAINING_STATUS['progress'],
+            'message':       CSV_TRAINING_STATUS['message'],
+            'error':         CSV_TRAINING_STATUS['error'],
+            'start_time':    CSV_TRAINING_STATUS['start_time'],
+            'end_time':      CSV_TRAINING_STATUS['end_time'],
+            'epochs':        CSV_TRAINING_STATUS['epochs'],
+            'current_epoch': CSV_TRAINING_STATUS['current_epoch'],
+            'metrics':       CSV_TRAINING_STATUS['metrics'],
+        }
+        os.makedirs(os.path.dirname(TRAINING_RESULTS_CSV_FILE), exist_ok=True)
+        with open(TRAINING_RESULTS_CSV_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save CSV training results: {e}")
+
+
+def load_csv_training_results():
+    """Load the last persisted CSV training results from disk."""
+    try:
+        if os.path.exists(TRAINING_RESULTS_CSV_FILE):
+            with open(TRAINING_RESULTS_CSV_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load CSV training results: {e}")
+    return None
+
 # Allowed file extensions
-ALLOWED_EXTENSIONS = {'edf', 'qrs', 'dat'}
+ALLOWED_EXTENSIONS = {'edf', 'qrs', 'dat', 'csv'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -522,29 +617,27 @@ def get_dashboard():
 
 @api_bp.route('/analyze', methods=['POST'])
 def analyze_ecg():
-    """Analyze ECG file"""
+    """Analyze ECG file — supports mode='edf' (default) and mode='csv'"""
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
-        
+
         file = request.files['file']
-        qrs_file = request.files.get('qrs_file', None)
-        
+
         # Get patient information from form data
         patient_info_str = request.form.get('patient_info', None)
         patient_info = {'name': 'Anonymous', 'age': 'N/A'}
-        
         if patient_info_str:
             try:
                 patient_info = json.loads(patient_info_str)
             except:
                 pass
-        
+
         patient_id = patient_info.get('id', 'unknown')
-        
+
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
-        
+
         # Parse settings
         settings_str = request.form.get('settings', None)
         settings = {}
@@ -553,46 +646,105 @@ def analyze_ecg():
                 settings = json.loads(settings_str)
             except:
                 pass
-                
-        if file and allowed_file(file.filename):
-            result_id = str(uuid.uuid4())
-            filename = secure_filename(file.filename)
-            
-            # Save main file
-            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{result_id}_{filename}")
-            file.save(filepath)
-            
-            # Save auxiliary QRS file side-by-side if provided
-            if qrs_file and allowed_file(qrs_file.filename):
-                # Ensure it carries the exact UUID prefix matching the .edf file
-                base_name = os.path.splitext(filename)[0]
-                qrs_filename = f"{result_id}_{base_name}{os.path.splitext(qrs_file.filename)[1]}"
-                qrs_filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], qrs_filename)
-                qrs_file.save(qrs_filepath)
-                logger.info(f"Saved paired annotations file: {qrs_filename}")
-            
-            # Process the file
-            result = process_ecg_file(filepath, result_id, filename, patient_id, settings)
-            
-            # Add patient info to result
-            result['patient_name'] = patient_info.get('name', 'Anonymous')
-            result['patient_age'] = patient_info.get('age', 'N/A')
-            
-            # Save to storage
+
+        # Determine analysis mode
+        mode = request.form.get('mode', 'edf').lower()
+
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type. Allowed: edf, qrs, dat, csv'}), 400
+
+        result_id = str(uuid.uuid4())
+        filename  = secure_filename(file.filename)
+        filepath  = os.path.join(current_app.config['UPLOAD_FOLDER'], f"{result_id}_{filename}")
+        file.save(filepath)
+
+        # ----------------------------------------------------------------
+        # CSV MODE — new pipeline
+        # ----------------------------------------------------------------
+        if mode == 'csv':
+            from services.csv_trainer import analyze_csv_file
+
+            models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+            csv_result = analyze_csv_file(filepath, models_dir=models_dir)
+
+            if not csv_result.get('success'):
+                return jsonify({'error': csv_result.get('error', 'CSV analysis failed')}), 500
+
+            result = {
+                'id':           result_id,
+                'file_name':    filename,
+                'patient_id':   patient_id,
+                'patient_name': patient_info.get('name', 'Anonymous'),
+                'patient_age':  patient_info.get('age', 'N/A'),
+                'status':       'completed',
+                'created_at':   datetime.now().isoformat(),
+                'analysis_mode': 'csv',
+                'result': {
+                    'primary_diagnosis': csv_result['primary_diagnosis'],
+                    'confidence':        csv_result['confidence'],
+                    'is_normal':         csv_result['is_normal'],
+                    'segments_analyzed': csv_result['segments_analyzed'],
+                    'predictions':       csv_result['predictions'],
+                },
+                'ecg_metrics': {
+                    'heart_rate':   'N/A',
+                    'rr_interval':  'N/A',
+                    'hrv':          'N/A',
+                    'p_wave':       'N/A',
+                    'qrs_complex':  'N/A',
+                    'qt_interval':  'N/A',
+                },
+                'recommendations': generate_recommendations(
+                    csv_result['primary_diagnosis'],
+                    csv_result['is_normal'],
+                ),
+            }
+
             if settings.get('autoSave', True):
                 results = load_results()
                 results.append(result)
                 save_results(results)
-            
+
             return jsonify({
-                'id': result['id'],
-                'message': 'Analysis completed successfully',
-                'status': 'completed',
-                'result_data': result
+                'id':          result['id'],
+                'message':     'CSV analysis completed successfully',
+                'status':      'completed',
+                'result_data': result,
             })
-        else:
-            return jsonify({'error': 'Invalid file type. Allowed: edf, qrs, dat'}), 400
-            
+
+        # ----------------------------------------------------------------
+        # EDF MODE — existing pipeline (DO NOT MODIFY)
+        # ----------------------------------------------------------------
+        qrs_file = request.files.get('qrs_file', None)
+
+        # Save auxiliary QRS file side-by-side if provided
+        if qrs_file and allowed_file(qrs_file.filename):
+            base_name    = os.path.splitext(filename)[0]
+            qrs_filename = f"{result_id}_{base_name}{os.path.splitext(qrs_file.filename)[1]}"
+            qrs_filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], qrs_filename)
+            qrs_file.save(qrs_filepath)
+            logger.info(f"Saved paired annotations file: {qrs_filename}")
+
+        # Process the file
+        result = process_ecg_file(filepath, result_id, filename, patient_id, settings)
+
+        # Add patient info to result
+        result['patient_name'] = patient_info.get('name', 'Anonymous')
+        result['patient_age']  = patient_info.get('age', 'N/A')
+
+        # Save to storage
+        if settings.get('autoSave', True):
+            results = load_results()
+            results.append(result)
+            save_results(results)
+
+        return jsonify({
+            'id':          result['id'],
+            'message':     'Analysis completed successfully',
+            'status':      'completed',
+            'result_data': result,
+        })
+
     except Exception as e:
         logger.error(f"Error analyzing ECG: {e}")
         return jsonify({'error': str(e)}), 500
@@ -775,33 +927,224 @@ def convert_mitbih():
         return jsonify({'error': str(e)}), 500
 
 
+# -------------------------------------------------------------------
+# NEW: POST /api/split-csv
+# -------------------------------------------------------------------
+@api_bp.route('/split-csv', methods=['POST'])
+def split_csv():
+    """
+    Split a CSV dataset file into train/test sets using record-based splitting.
+    Input JSON: { "dataset_path": "path/to/csv" }
+    """
+    try:
+        from services.csv_trainer import split_csv_by_record
+
+        data = request.get_json() or {}
+        dataset_path = data.get('dataset_path', '')
+
+        if not dataset_path:
+            return jsonify({'error': 'dataset_path is required'}), 400
+
+        # Resolve relative path against project root
+        if not os.path.isabs(dataset_path):
+            current_dir  = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(current_dir))
+            dataset_path = os.path.join(project_root, dataset_path)
+
+        # Determine output directory (project_root / Dataset / CSV / splits)
+        current_dir  = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        output_dir   = os.path.join(project_root, 'Dataset', 'CSV', 'splits')
+
+        result = split_csv_by_record(dataset_path, output_dir=output_dir)
+
+        if not result.get('success'):
+            return jsonify({'error': result.get('error', 'Split failed')}), 500
+
+        return jsonify({
+            'train_file':  result['train_file'],
+            'test_file':   result['test_file'],
+            'train_rows':  result['train_rows'],
+            'test_rows':   result['test_rows'],
+            'total_rows':  result['total_rows'],
+            'message':     result['message'],
+        })
+
+    except Exception as e:
+        logger.error(f"Error splitting CSV: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @api_bp.route('/train-model', methods=['POST'])
 def train_model():
     """
-    Train the DSNN model with given parameters
+    Train the model — supports mode='raw' (DSNN, default) and mode='csv' (MLP)
     """
     global TRAINING_STATUS
-    
+
     try:
         import sys
-        
+
         # Get parameters from request
-        data = request.get_json() or {}
+        data         = request.get_json() or {}
+        mode         = data.get('mode', 'raw').lower()   # 'raw' | 'csv'
         dataset_path = data.get('dataset_path', 'Dataset/MIT-BIH')
-        epochs = int(data.get('epochs', 50))
-        
+        epochs       = int(data.get('epochs', 50))
+
         # Convert relative path to absolute path if needed
         if not os.path.isabs(dataset_path):
-            current_dir = os.path.dirname(os.path.abspath(__file__))
+            current_dir  = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(os.path.dirname(current_dir))
             dataset_path = os.path.join(project_root, dataset_path)
-        
-        logger.info(f"Dataset path resolved to: {dataset_path}")
-        
+
+        logger.info(f"Train mode={mode} | Dataset path resolved to: {dataset_path}")
+
+        # ------------------------------------------------------------
+        # CSV MODE — new MLP training pipeline
+        # ------------------------------------------------------------
+        if mode == 'csv':
+            # dataset_path should point to the CSV file OR to the splits directory
+            # We prefer the splits: determine train.csv + test.csv paths
+            if os.path.isfile(dataset_path) and dataset_path.endswith('.csv'):
+                # User passed a raw CSV → auto-split first
+                from services.csv_trainer import split_csv_by_record
+                current_dir  = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(os.path.dirname(current_dir))
+                splits_dir   = os.path.join(project_root, 'Dataset', 'CSV', 'splits')
+                split_result = split_csv_by_record(dataset_path, output_dir=splits_dir)
+                if not split_result.get('success'):
+                    return jsonify({'error': f"Auto-split failed: {split_result.get('error')}"}), 400
+                train_csv = split_result['train_file']
+                test_csv  = split_result['test_file']
+            else:
+                # Assume dataset_path is the splits directory
+                train_csv = os.path.join(dataset_path, 'train.csv')
+                test_csv  = os.path.join(dataset_path, 'test.csv')
+
+            if not os.path.exists(train_csv):
+                return jsonify({'error': f'train.csv not found: {train_csv}. Run CSV Split first.'}), 400
+            if not os.path.exists(test_csv):
+                return jsonify({'error': f'test.csv not found: {test_csv}. Run CSV Split first.'}), 400
+
+            # Backup existing CSV results separately
+            backup_csv_training_results()
+
+            # Reset CSV-specific training status (does NOT touch TRAINING_STATUS)
+            CSV_TRAINING_STATUS['status']        = 'running'
+            CSV_TRAINING_STATUS['progress']      = 0
+            CSV_TRAINING_STATUS['message']       = 'Starting CSV (MLP) training...'
+            CSV_TRAINING_STATUS['error']         = None
+            CSV_TRAINING_STATUS['start_time']    = datetime.now().isoformat()
+            CSV_TRAINING_STATUS['epochs']        = epochs
+            CSV_TRAINING_STATUS['current_epoch'] = 0
+            CSV_TRAINING_STATUS['image_files']   = []
+            CSV_TRAINING_STATUS['metrics']       = {'history': [], 'evaluation': None}
+            CSV_TRAINING_STOP_EVENT.clear()
+
+            models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+            images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
+
+            def run_csv_training():
+                global CSV_TRAINING_STATUS
+                try:
+                    from services.csv_trainer import train_csv_model
+
+                    CSV_TRAINING_STATUS['message']  = 'Loading CSV data and initializing MLP...'
+                    CSV_TRAINING_STATUS['progress'] = 5
+
+                    def progress_update(epoch, total_epochs, tr_loss, tr_acc, val_loss, val_acc):
+                        CSV_TRAINING_STATUS['current_epoch'] = epoch
+                        CSV_TRAINING_STATUS['progress'] = int(5 + (epoch / total_epochs) * 85)
+                        CSV_TRAINING_STATUS['message'] = (
+                            f'Epoch {epoch}/{total_epochs} — '
+                            f'Train Acc: {tr_acc:.1f}%, Val Acc: {val_acc:.1f}%'
+                        )
+                        CSV_TRAINING_STATUS['metrics']['history'].append({
+                            'epoch':      epoch,
+                            'train_loss': round(tr_loss, 4),
+                            'train_acc':  round(tr_acc, 2),
+                            'val_loss':   round(val_loss, 4),
+                            'val_acc':    round(val_acc, 2),
+                        })
+
+                    result = train_csv_model(
+                        train_csv_path=train_csv,
+                        test_csv_path=test_csv,
+                        epochs=epochs,
+                        models_dir=models_dir,
+                        images_dir=images_dir,
+                        progress_callback=progress_update,
+                        stop_event=CSV_TRAINING_STOP_EVENT,
+                    )
+
+                    if CSV_TRAINING_STOP_EVENT.is_set():
+                        rollback_csv_training_results()
+                        CSV_TRAINING_STATUS['status']   = 'stopped'
+                        CSV_TRAINING_STATUS['message']  = 'CSV training stopped by user — rolling back.'
+                        CSV_TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+                        return
+
+                    if not result.get('success'):
+                        raise RuntimeError(result.get('error', 'Unknown CSV training error'))
+
+                    # Store evaluation metrics
+                    eval_metrics = result.get('metrics', {})
+                    CSV_TRAINING_STATUS['metrics']['evaluation'] = {
+                        'accuracy':  round(float(eval_metrics.get('accuracy', 0)), 4),
+                        'precision': round(float(eval_metrics.get('precision', 0)), 4),
+                        'recall':    round(float(eval_metrics.get('recall', 0)), 4),
+                        'f1':        round(float(eval_metrics.get('f1', 0)), 4),
+                    }
+
+                    # Collect CSV-specific image files
+                    import time as _time
+                    ts = int(_time.time())
+                    csv_images = []
+                    for img_name in ['training_history_csv.png', 'confusion_matrix_csv.png']:
+                        if os.path.exists(os.path.join(images_dir, img_name)):
+                            csv_images.append(f'/images/{img_name}?t={ts}')
+
+                    CSV_TRAINING_STATUS['status']      = 'completed'
+                    CSV_TRAINING_STATUS['progress']    = 100
+                    CSV_TRAINING_STATUS['message']     = 'CSV training completed successfully!'
+                    CSV_TRAINING_STATUS['end_time']    = datetime.now().isoformat()
+                    CSV_TRAINING_STATUS['image_files'] = csv_images
+
+                    save_csv_training_results()
+                    if os.path.exists(TRAINING_BACKUP_CSV_FILE):
+                        os.remove(TRAINING_BACKUP_CSV_FILE)
+
+                    logger.info('CSV (MLP) training completed successfully!')
+
+                except Exception as e:
+                    logger.error(f'CSV training error: {e}')
+                    rollback_csv_training_results()
+                    CSV_TRAINING_STATUS['status']   = 'failed'
+                    CSV_TRAINING_STATUS['error']    = str(e)
+                    CSV_TRAINING_STATUS['message']  = f'CSV training failed: {e}'
+                    CSV_TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+
+            training_thread = threading.Thread(target=run_csv_training, daemon=True)
+            training_thread.start()
+            CSV_TRAINING_STATUS['training_thread'] = training_thread
+
+            return jsonify({
+                'success':   True,
+                'message':   'CSV (MLP) training started',
+                'status':    'running',
+                'mode':      'csv',
+                'train_csv': train_csv,
+                'test_csv':  test_csv,
+                'epochs':    epochs,
+            })
+
+        # ------------------------------------------------------------
+        # RAW MODE — existing DSNN pipeline (DO NOT MODIFY below)
+        # ------------------------------------------------------------
         # Validate dataset path
         if not os.path.exists(dataset_path):
             return jsonify({'error': f'Dataset path does not exist: {dataset_path}'}), 400
-        
+
         # Get list of EDF files in the dataset (converted from MIT-BIH .hea+.dat)
         record_files = [f.replace('.edf', '') for f in os.listdir(dataset_path) if f.endswith('.edf')]
         
@@ -966,72 +1309,135 @@ def train_model():
 def training_status():
     """
     Get training status and results.
-    Always returns existing images and model info regardless of training state.
-    On fresh server start (not_started), loads last saved results from disk.
+    Supports ?mode=raw (default) | csv  to return the correct pipeline's status.
     """
-    global TRAINING_STATUS
-    
+    global TRAINING_STATUS, CSV_TRAINING_STATUS
+
     try:
-        # Always check for existing model files
+        mode = request.args.get('mode', 'raw').lower()
+        import time as _time
+        ts = int(_time.time())
         models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+        images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
+
+        # ----------------------------------------------------------------
+        # CSV / MLP  status
+        # ----------------------------------------------------------------
+        if mode == 'csv':
+            # Check CSV-specific model files
+            csv_model_files = {
+                'model_csv.pth':      os.path.exists(os.path.join(models_dir, 'model_csv.pth')),
+                'scaler.pkl':         os.path.exists(os.path.join(models_dir, 'scaler.pkl')),
+                'label_encoder.pkl':  os.path.exists(os.path.join(models_dir, 'label_encoder.pkl')),
+            }
+            csv_model_exists = any(csv_model_files.values())
+
+            # CSV-specific images
+            csv_images = []
+            for img_name in ['training_history_csv.png', 'confusion_matrix_csv.png']:
+                if os.path.exists(os.path.join(images_dir, img_name)):
+                    csv_images.append(f'/images/{img_name}?t={ts}')
+
+            # Dead-thread recovery
+            if CSV_TRAINING_STATUS['status'] == 'running':
+                thread = CSV_TRAINING_STATUS.get('training_thread')
+                if thread and not thread.is_alive():
+                    if not CSV_TRAINING_STOP_EVENT.is_set():
+                        CSV_TRAINING_STATUS['status']   = 'completed'
+                        CSV_TRAINING_STATUS['message']  = 'CSV training completed successfully!'
+                        CSV_TRAINING_STATUS['progress'] = 100
+                        CSV_TRAINING_STATUS['end_time'] = datetime.now().isoformat()
+                        save_csv_training_results()
+
+            # Load persisted results on first request after restart
+            if CSV_TRAINING_STATUS['status'] == 'not_started':
+                saved = load_csv_training_results()
+                if saved and saved.get('status') in ('completed', 'stopped', 'failed'):
+                    CSV_TRAINING_STATUS['status']        = saved['status']
+                    CSV_TRAINING_STATUS['progress']      = saved.get('progress', 0)
+                    CSV_TRAINING_STATUS['message']       = saved.get('message', '')
+                    CSV_TRAINING_STATUS['error']         = saved.get('error')
+                    CSV_TRAINING_STATUS['start_time']    = saved.get('start_time')
+                    CSV_TRAINING_STATUS['end_time']      = saved.get('end_time')
+                    CSV_TRAINING_STATUS['epochs']        = saved.get('epochs', 0)
+                    CSV_TRAINING_STATUS['current_epoch'] = saved.get('current_epoch', 0)
+                    CSV_TRAINING_STATUS['metrics']       = saved.get('metrics', {'history': [], 'evaluation': None})
+                    logger.info('Loaded last CSV training results from disk.')
+
+            return jsonify({
+                'status':        CSV_TRAINING_STATUS['status'],
+                'progress':      CSV_TRAINING_STATUS['progress'],
+                'message':       CSV_TRAINING_STATUS['message'],
+                'error':         CSV_TRAINING_STATUS['error'],
+                'epochs':        CSV_TRAINING_STATUS['epochs'],
+                'current_epoch': CSV_TRAINING_STATUS['current_epoch'],
+                'image_files':   csv_images,
+                'model_exists':  csv_model_exists,
+                'model_files':   csv_model_files,
+                'metrics':       CSV_TRAINING_STATUS['metrics'],
+                'start_time':    CSV_TRAINING_STATUS['start_time'],
+                'end_time':      CSV_TRAINING_STATUS['end_time'],
+                'mode':          'csv',
+            })
+
+        # ----------------------------------------------------------------
+        # RAW / DSNN  status  (original logic — untouched)
+        # ----------------------------------------------------------------
+        # Always check for existing model files
         model_files = {}
         for mf in ['dsnn_model.pth', 'best_acc_model.pth', 'best_loss_model.pth']:
             model_files[mf] = os.path.exists(os.path.join(models_dir, mf))
         model_exists = any(model_files.values())
-        
-        # Always check for existing image files (add timestamp for cache-busting)
-        images_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
-        import time
-        ts = int(time.time())
+
+        # Raw-specific images
         existing_images = []
         for f in ['training_history.png', 'confusion_matrix.png']:
             img_path = os.path.join(images_dir, f)
             if os.path.exists(img_path):
                 existing_images.append(f'/images/{f}?t={ts}')
-        
-        # If training thread died unexpectedly while status is still 'running'
+
+        # Dead-thread recovery
         if TRAINING_STATUS['status'] == 'running':
             thread = TRAINING_STATUS.get('training_thread')
             if thread and not thread.is_alive():
-                # Thread finished but status wasn't updated (crash?)
                 if not TRAINING_STOP_EVENT.is_set():
                     TRAINING_STATUS['status'] = 'completed'
                     TRAINING_STATUS['message'] = 'Training completed successfully!'
                     TRAINING_STATUS['progress'] = 100
                     TRAINING_STATUS['end_time'] = datetime.now().isoformat()
                     save_training_results()
-        
-        # If no training has happened this session, try to load saved results from disk
+
+        # Load persisted results on first request after restart
         if TRAINING_STATUS['status'] == 'not_started':
             saved = load_training_results()
             if saved and saved.get('status') in ('completed', 'stopped', 'failed'):
-                # Populate the in-memory status from the saved file
-                TRAINING_STATUS['status'] = saved['status']
-                TRAINING_STATUS['progress'] = saved.get('progress', 0)
-                TRAINING_STATUS['message'] = saved.get('message', '')
-                TRAINING_STATUS['error'] = saved.get('error')
-                TRAINING_STATUS['start_time'] = saved.get('start_time')
-                TRAINING_STATUS['end_time'] = saved.get('end_time')
-                TRAINING_STATUS['epochs'] = saved.get('epochs', 0)
+                TRAINING_STATUS['status']        = saved['status']
+                TRAINING_STATUS['progress']      = saved.get('progress', 0)
+                TRAINING_STATUS['message']       = saved.get('message', '')
+                TRAINING_STATUS['error']         = saved.get('error')
+                TRAINING_STATUS['start_time']    = saved.get('start_time')
+                TRAINING_STATUS['end_time']      = saved.get('end_time')
+                TRAINING_STATUS['epochs']        = saved.get('epochs', 0)
                 TRAINING_STATUS['current_epoch'] = saved.get('current_epoch', 0)
-                TRAINING_STATUS['metrics'] = saved.get('metrics', {'history': [], 'evaluation': None})
-                logger.info("Loaded last training results from disk.")
-        
+                TRAINING_STATUS['metrics']       = saved.get('metrics', {'history': [], 'evaluation': None})
+                logger.info('Loaded last raw training results from disk.')
+
         return jsonify({
-            'status': TRAINING_STATUS['status'],
-            'progress': TRAINING_STATUS['progress'],
-            'message': TRAINING_STATUS['message'],
-            'error': TRAINING_STATUS['error'],
-            'epochs': TRAINING_STATUS['epochs'],
+            'status':        TRAINING_STATUS['status'],
+            'progress':      TRAINING_STATUS['progress'],
+            'message':       TRAINING_STATUS['message'],
+            'error':         TRAINING_STATUS['error'],
+            'epochs':        TRAINING_STATUS['epochs'],
             'current_epoch': TRAINING_STATUS['current_epoch'],
-            'image_files': existing_images,
-            'model_exists': model_exists,
-            'model_files': model_files,
-            'metrics': TRAINING_STATUS['metrics'],
-            'start_time': TRAINING_STATUS['start_time'],
-            'end_time': TRAINING_STATUS['end_time']
+            'image_files':   existing_images,
+            'model_exists':  model_exists,
+            'model_files':   model_files,
+            'metrics':       TRAINING_STATUS['metrics'],
+            'start_time':    TRAINING_STATUS['start_time'],
+            'end_time':      TRAINING_STATUS['end_time'],
+            'mode':          'raw',
         })
-        
+
     except Exception as e:
         logger.error(f"Error getting training status: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1040,30 +1446,33 @@ def training_status():
 @api_bp.route('/stop-training', methods=['POST'])
 def stop_training():
     """
-    Stop the current training process
+    Stop the currently running training process.
+    Accepts optional JSON body: { "mode": "raw" | "csv" }
+    Defaults to stopping raw if either is running, csv if only csv is running.
     """
-    global TRAINING_STATUS
-    
+    global TRAINING_STATUS, CSV_TRAINING_STATUS
+
     try:
+        data = request.get_json() or {}
+        mode = data.get('mode', 'raw').lower()
+
+        if mode == 'csv':
+            if CSV_TRAINING_STATUS['status'] != 'running':
+                return jsonify({'success': False, 'message': 'No CSV training is currently running'}), 400
+            CSV_TRAINING_STOP_EVENT.set()
+            CSV_TRAINING_STATUS['status']  = 'stopped'
+            CSV_TRAINING_STATUS['message'] = 'CSV training stop requested — will stop after current epoch...'
+            return jsonify({'success': True, 'message': 'CSV training stop requested. Will stop after current epoch.'})
+
+        # Raw mode (default)
         if TRAINING_STATUS['status'] != 'running':
-            return jsonify({
-                'success': False,
-                'message': 'No training is currently running'
-            }), 400
-        
-        # Signal the training loop to stop
+            return jsonify({'success': False, 'message': 'No raw training is currently running'}), 400
         TRAINING_STOP_EVENT.set()
-        
-        # Mark as stopped
-        TRAINING_STATUS['status'] = 'stopped'
+        TRAINING_STATUS['status']  = 'stopped'
         TRAINING_STATUS['message'] = 'Training stop requested — will stop after current epoch...'
         TRAINING_STATUS['progress'] = TRAINING_STATUS.get('progress', 0)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Training stop requested. The training will stop after the current epoch.'
-        })
-        
+        return jsonify({'success': True, 'message': 'Training stop requested. The training will stop after the current epoch.'})
+
     except Exception as e:
         logger.error(f"Error stopping training: {e}")
         return jsonify({'error': str(e)}), 500

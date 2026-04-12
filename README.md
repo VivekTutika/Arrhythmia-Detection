@@ -13,8 +13,8 @@ This project was developed to bridge the gap between advanced deep learning tech
 ### Key Features
 - **ECG Reader & Uploads**: Flexible mode selection for file uploads (`.dat`/`.hea`, `.edf`, or `.qrs`), complete with robust background processing.
 - **Dynamic Visualization & Downloads**: Real-time rendering of ECG signals via interactive visualizations. Generated charts utilize image caching for optimized performance and are programmatically downloadable for clinical records.
-- **Deep Learning Pipeline**: Powered by a Deep Spiking Neural Network (DSNN) built in PyTorch. The model takes advantage of temporal signal dynamics and utilizes focal loss to handle class imbalances seamlessly.
-- **Live Training Dashboard**: Real-time progress broadcasts via status polling to the frontend. Live loss and accuracy curves allow researchers and clinicians to monitor model performance dynamically.
+- **Deep Learning Pipeline**: Hosted as a **Dual-Mode Architecture**. Currently features an isolated Deep Spiking Neural Network (DSNN) pipeline handling raw temporal waveforms, and an independent ultra-shallow Residual MLP engineered exclusively for tabular `.csv` morphology features to manage dense covariate shifts.
+- **Live Training Dashboard**: Real-time progress broadcasts via status polling to the frontend for both RAW and CSV pipelines concurrently. Live loss and accuracy curves allow researchers and clinicians to monitor model performance dynamically without cross-contamination.
 - **Historical Analysis**: Maintain a history of uploaded datasets and generated prediction reports for future comparison.
 - **Configurable Settings**: A dedicated settings panel allows users to configure confidence thresholds; results dropping below these logic checks are safely flagged as **Inconclusive**.
 
@@ -30,19 +30,28 @@ The application implements a strict 3-stage clinical pipeline converting raw sig
 - **Signal Filtering**: Applies a **0.5Hz - 40Hz Butterworth Bandpass Filter** to mitigate baseline wander and limit powerline interference noise.
 - **Normalization**: Z-Score normalization per-segment allows robust morphological feature extraction over amplitude thresholds.
 
-### 2. DSNN Architecture & Training
+### 2. Dual-Mode Deep Learning Architecture 
+The application guarantees mathematical isolation natively handling differing geometries using independent processing environments:
+
+#### A. Raw Sequence Engine (DSNN)
 - Realized as a Deep Convolutional SNN specifically structured for sequential temporal parsing.
 - Employs **Peak-Triggered Segmentation**, centering focus cleanly along the R-Peak utilizing `.qrs` annotations.
-- Addresses the rareness of life-threatening arrhythmias (e.g., Ventricular Arrhythmias, AFib) over regular sinus rhythms via statistically balanced subset iterations and focal loss.
+- Addresses the rareness of life-threatening arrhythmias via statistically balanced subset iterations and focal sequence loss.
+
+#### B. Tabular Morphology Pipeline (CSV-MLP)
+- Extracts morphological attributes scaled accurately via `RobustScaler` (protecting tabular data from intense outlier variance).
+- Features an ultra-shallow Residual Block structure (`Input -> 64 -> 32 -> 16 -> num_classes`) designed natively to halt tabular point-memorization (overfitting).
+- Mitigates class dominance (where Normal overrides Ventricular classes) by wrapping computed `balanced` class weights with an inverse square root cap restrictor.
+- Natively forces healthy diagnostic boundaries with strict `0.1` label smoothing, `AdamW` L2 structural decays, and `CosineAnnealingLR` schedules ensuring gradient traversals peak flawlessly around ~85%.
 
 ### 3. Inference & Diagnostics
-- Outputs predictions sorted among 6 main classifications:
-  1. Normal Sinus Rhythm
-  2. Atrial Fibrillation (AFib)
-  3. Ventricular Arrhythmia
-  4. Conduction Block
-  5. Premature Contraction
-- Delivers a primary diagnosis with an associated **confidence score**. Detailed segments map specific regions contributing to the classification.
+- Outputs predictions sorted among 5 main classifications across distinct modalities:
+  1. Normal Sinus Rhythm (N)
+  2. Supraventricular Arrhythmia (S)
+  3. Ventricular Arrhythmia (V)
+  4. Fusion Beat (F)
+  5. Unknown / Unclassifiable (Q)
+- Delivers a primary diagnosis with an associated **confidence/probability score**. Detailed segments map specific regions contributing to the classification.
 
 ---
 
