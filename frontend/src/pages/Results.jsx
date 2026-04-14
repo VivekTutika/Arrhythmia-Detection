@@ -527,7 +527,7 @@ const Results = () => {
               }}>
                 <span>{metric.label}</span>
                 <span style={{ fontWeight: '600', color: 'var(--primary-color)' }}>
-                  {metric.value !== null && metric.value !== undefined ? `${metric.value.toFixed(3)} ${metric.unit}` : 'N/A'}
+                  {typeof metric.value === 'number' ? `${metric.value.toFixed(3)} ${metric.unit}` : 'N/A'}
                 </span>
               </div>
             ))}

@@ -686,14 +686,14 @@ def analyze_ecg():
                     'segments_analyzed': csv_result['segments_analyzed'],
                     'predictions':       csv_result['predictions'],
                 },
-                'ecg_metrics': {
-                    'heart_rate':   'N/A',
-                    'rr_interval':  'N/A',
-                    'hrv':          'N/A',
-                    'p_wave':       'N/A',
-                    'qrs_complex':  'N/A',
-                    'qt_interval':  'N/A',
-                },
+                'ecg_metrics': csv_result.get('ecg_metrics', {
+                    'heart_rate':   None,
+                    'rr_interval':  None,
+                    'hrv':          None,
+                    'p_wave':       None,
+                    'qrs_complex':  None,
+                    'qt_interval':  None,
+                }),
                 'recommendations': generate_recommendations(
                     csv_result['primary_diagnosis'],
                     csv_result['is_normal'],

@@ -586,11 +586,53 @@ def analyze_csv_file(
         for idx, cnt in zip(unique_idxs, counts):
             raw_label = le.inverse_transform([idx])[0]
             diag_name = get_diagnosis_name(raw_label)
-            predictions[diag_name] = int(cnt)
+            # Convert counts to percentages (uniform with EDF results)
+            predictions[diag_name] = int(round(cnt / total_samples * 100))
+
+        # ---------- Calculate Clinical Metrics (assuming MIT-BIH 360Hz) ----------
+        fs = 360
+        
+        # Calculate RR intervals in milliseconds
+        rr_col = '0_post-RR' if '0_post-RR' in df.columns else ('0_pre-RR' if '0_pre-RR' in df.columns else None)
+        
+        # Import categorization logic from train_dsnn (internal import to avoid circular dependencies)
+        from services.train_dsnn import classify_heart_rate
+        
+        ecg_metrics = {
+            'heart_rate':   None,
+            'rr_interval':  None,
+            'hrv':          None,
+            'p_wave':       None,
+            'qrs_complex':  None,
+            'qt_interval':  None,
+            'r_peaks':      total_samples,
+            'hr_categories': [],
+        }
+        
+        if rr_col:
+            rr_samples = df[rr_col].values
+            avg_rr_samples = np.mean(rr_samples)
+            
+            # Uniformity: use ms (int) instead of seconds
+            ecg_metrics['rr_interval'] = int(round(avg_rr_samples / fs * 1000))
+            heart_rate = round(float(60 / (avg_rr_samples / fs)), 1) if avg_rr_samples > 0 else None
+            ecg_metrics['heart_rate']  = int(round(heart_rate)) if heart_rate else None
+            ecg_metrics['hrv']         = int(round(np.std(rr_samples) / fs * 1000))
+            
+            if ecg_metrics['heart_rate']:
+                ecg_metrics['hr_categories'] = classify_heart_rate(ecg_metrics['heart_rate'])
+            
+        # Wave intervals in seconds (keeping as float seconds as seen in EDF samples)
+        if '0_pq_interval' in df.columns:
+            ecg_metrics['p_wave'] = round(float(np.mean(df['0_pq_interval']) / fs), 3)
+        if '0_qrs_interval' in df.columns:
+            ecg_metrics['qrs_complex'] = round(float(np.mean(df['0_qrs_interval']) / fs), 3)
+        if '0_qt_interval' in df.columns:
+            ecg_metrics['qt_interval'] = round(float(np.mean(df['0_qt_interval']) / fs), 3)
 
         logger.info(
             f"CSV inference complete: {total_samples} beats → "
-            f"{primary_diagnosis} ({confidence}%)"
+            f"{primary_diagnosis} ({confidence}%) | HR: {ecg_metrics['heart_rate']}"
         )
 
         return {
@@ -601,6 +643,7 @@ def analyze_csv_file(
             'predictions':       predictions,
             'segments_analyzed': total_samples,
             'classes':           classes,
+            'ecg_metrics':       ecg_metrics,
         }
 
     except Exception as e:

@@ -371,5 +371,90 @@
     ],
     "patient_name": "Naman",
     "patient_age": "36"
+  },
+  {
+    "id": "a9b4626b-8025-46d8-ba63-36270972b0b1",
+    "file_name": "test.csv",
+    "patient_id": "patient_1776188774823",
+    "patient_name": "Haneef",
+    "patient_age": "22",
+    "status": "completed",
+    "created_at": "2026-04-14T23:16:20.410545",
+    "analysis_mode": "csv",
+    "result": {
+      "primary_diagnosis": "Normal Sinus Rhythm",
+      "confidence": 86.0,
+      "is_normal": true,
+      "segments_analyzed": 17111,
+      "predictions": {
+        "Fusion Beat": 0,
+        "Normal Sinus Rhythm": 86,
+        "SVEB": 4,
+        "VEB": 10
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 84,
+      "rr_interval": 718,
+      "hrv": 208,
+      "p_wave": 0.028,
+      "qrs_complex": 0.059,
+      "qt_interval": 0.131,
+      "r_peaks": 17111,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person"
+      ]
+    },
+    "recommendations": [
+      "Maintain current healthy cardiovascular lifestyle and routine checkups.",
+      "Continue regular aerobic exercise (e.g., at least 150 minutes of moderate intensity per week).",
+      "Monitor periodically; no immediate medical intervention is required for this recording."
+    ]
+  },
+  {
+    "id": "dd3d371c-398f-4cf6-b8cb-1511244b9ef3",
+    "file_name": "222.edf",
+    "patient_id": "patient_1776188818760_0",
+    "status": "completed",
+    "created_at": "2026-04-14T23:17:00.876776",
+    "result": {
+      "primary_diagnosis": "Inconclusive (Low Confidence)",
+      "confidence": 40.7,
+      "is_normal": false,
+      "segments_analyzed": 2632,
+      "predictions": {
+        "Normal Sinus Rhythm": 40,
+        "Atrial Fibrillation": 23,
+        "Ventricular Arrhythmia": 5,
+        "Conduction Block": 0,
+        "Premature Contraction": 30
+      }
+    },
+    "ecg_metrics": {
+      "heart_rate": 80,
+      "rr_interval": 744,
+      "hrv": 58,
+      "p_wave": 0.144,
+      "qrs_complex": 0.071,
+      "qt_interval": 0.414,
+      "hr_categories": [
+        "Normal Healthy Person",
+        "High BP person",
+        "Stressed person",
+        "Fevered or illness person"
+      ],
+      "r_peaks": 2634
+    },
+    "recommendations": [
+      "The neural network could not determine a definitive classification pattern. A manual review is required.",
+      "Ensure the ECG leads were securely fastened with proper contact, and repeat the recording if possible.",
+      "Consult a trained human specialist to visually inspect the provided waveform outputs.",
+      "Avoid making clinical decisions purely based on this low-confidence inference."
+    ],
+    "patient_name": "Simha",
+    "patient_age": "21"
   }
 ]
